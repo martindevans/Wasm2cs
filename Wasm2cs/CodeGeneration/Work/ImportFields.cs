@@ -3,7 +3,7 @@ using WebAssembly;
 
 namespace Wasm2cs.CodeGeneration.Work;
 
-internal class GlobalImportField(Import.Global @global)
+internal class GlobalImportField(Import.Global global)
     : IWorkItem
 {
     public Task Emit(IndentedTextWriter writer, Module module)

@@ -16,12 +16,12 @@ internal class FuncExport(Export function)
         var @return = type.Returns.Count > 0 ? "return" : "";
 
         var paramsTypes = MethodParameterList(type.Parameters);
-        var paramsArgs = @paramsTypes.Select((t, i) => $"{t} _param{i}").ToList();
-        var callArgs = string.Join(", ", @paramsTypes.Select((t, i) => $"_param{i}").ToList());
+        var paramsArgs = paramsTypes.Select((t, i) => $"{t} _param{i}").ToList();
+        var callArgs = string.Join(", ", paramsTypes.Select((_, i) => $"_param{i}").ToList());
 
-        await using (await writer.Method(function.Name, args: @paramsArgs, returns: type.Returns.ReturnType()))
+        await using (await writer.Method(function.Name, args: paramsArgs, returns: type.Returns.ReturnType()))
         {
-            await writer.AppendLine($"{@return} Function{function.Index}({@callArgs});");
+            await writer.AppendLine($"{@return} Function{function.Index}({callArgs});");
         }
         await writer.AppendLine();
     }

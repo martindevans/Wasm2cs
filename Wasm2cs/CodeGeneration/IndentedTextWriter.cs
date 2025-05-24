@@ -1,6 +1,4 @@
-﻿using WebAssembly;
-
-namespace Wasm2cs.CodeGeneration;
+﻿namespace Wasm2cs.CodeGeneration;
 
 internal class IndentedTextWriter
 {
@@ -98,8 +96,8 @@ internal class IndentedTextWriter
         await AppendLine($"public {type} {name}");
         await using (await Braces())
         {
-            await AppendLine($"{(@publicGet ? "private " : "")}set => {backingField} = value;");
-            await AppendLine($"{(@publicSet ? "private " : "")}get => {backingField};");
+            await AppendLine($"{(publicGet ? "private " : "")}set => {backingField} = value;");
+            await AppendLine($"{(publicSet ? "private " : "")}get => {backingField};");
         }
 
         await AppendLine();

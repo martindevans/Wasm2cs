@@ -1,27 +1,30 @@
 ﻿using System.ComponentModel;
+using JetBrains.Annotations;
 using Spectre.Console.Cli;
 using Wasm2cs;
 
 var app = new CommandApp<ConvertWasmCommand>();
 return app.Run(args);
 
+[UsedImplicitly]
 internal sealed class ConvertWasmCommand
     : Command<ConvertWasmCommand.Settings>
 {
+    [UsedImplicitly]
     public sealed class Settings
         : CommandSettings
     {
         [Description("Path to convert.")]
         [CommandArgument(0, "[inputPath]")]
-        public required string InputPath { get; init; }
+        public required string InputPath { get; [UsedImplicitly] init; }
 
         [Description("Namespace for generated code.")]
         [CommandOption("-n|--namespace")]
-        public required string NameSpace { get; init; }
+        public required string NameSpace { get; [UsedImplicitly] init; }
 
         [Description("Path to write to. Defaults to stdout")]
         [CommandOption("-o|--output")]
-        public string? OutputPath { get; init; }
+        public string? OutputPath { get; [UsedImplicitly] init; }
     }
 
     public override int Execute(CommandContext context, Settings settings)

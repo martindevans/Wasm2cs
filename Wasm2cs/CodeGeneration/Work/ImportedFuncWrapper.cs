@@ -13,12 +13,12 @@ internal class ImportedFuncWrapper(Import.Function Import, int Index)
         var @return = type.Returns.Count > 0 ? "return " : "";
 
         var paramsTypes = type.Parameters.Select(a => a.ToDotnetType()).ToArray();
-        var paramsArgs = @paramsTypes.Select((t, i) => $"{t} _param{i}").ToList();
-        var callArgs = string.Join(", ", @paramsTypes.Select((t, i) => $"_param{i}").ToList());
+        var paramsArgs = paramsTypes.Select((t, i) => $"{t} _param{i}").ToList();
+        var callArgs = string.Join(", ", paramsTypes.Select((t, i) => $"_param{i}").ToList());
 
         var backingField = Import.BackingFieldName();
 
-        await using (await writer.Method($"Function{Index}", @public:false, args: @paramsArgs, returns: type.Returns.ReturnType()))
+        await using (await writer.Method($"Function{Index}", @public:false, args: paramsArgs, returns: type.Returns.ReturnType()))
         {
             await writer.AppendLine($"{@return} {backingField}({callArgs});");
         }

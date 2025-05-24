@@ -1,5 +1,4 @@
-﻿using System.Reflection.Metadata;
-using Wasm2cs.CodeGeneration.Extensions;
+﻿using Wasm2cs.CodeGeneration.Extensions;
 using WebAssembly;
 using WebAssembly.Instructions;
 
@@ -67,6 +66,12 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
                         var callName = $"Function{call.Index}";
                         var parameters = string.Join(", ", inputs);
                         await writer.AppendLine($"{callName}({parameters});");
+                        break;
+                    }
+
+                    case OpCode.Unreachable:
+                    {
+                        await writer.AppendLine("throw new UnreachableTrapException();");
                         break;
                     }
 

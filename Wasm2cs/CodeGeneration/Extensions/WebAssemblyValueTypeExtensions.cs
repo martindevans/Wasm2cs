@@ -24,7 +24,7 @@ internal static class WebAssemblyValueTypeExtensions
 
     private static string FunctionObjectTypeSignature(IList<WebAssemblyValueType> parameters, IList<WebAssemblyValueType> returns)
     {
-        var inputs = string.Join(", ", parameters.Select((a, i) => a.ToDotnetType().Name));
+        var inputs = string.Join(", ", parameters.Select((a, _) => a.ToDotnetType().Name));
         var outputs = ReturnType(returns);
 
         if (returns.Count == 0)
