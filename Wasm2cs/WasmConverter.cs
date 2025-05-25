@@ -41,7 +41,6 @@ public static class WasmConverter
         {
             foreach (var item in work)
             {
-                Console.WriteLine($" - {item.GetType().Name}");
                 await item.Emit(builder, module);
                 await builder.AppendLine();
             }
@@ -105,7 +104,7 @@ public static class WasmConverter
     private static IEnumerable<IWorkItem> IndexedFunctions(Module module)
     {
         // Functions are indexed starting from zero. Imports first, then explicitly defined functions.
-        var funcIndex = 0;
+        var funcIndex = 0u;
 
         // Find all function imports
         foreach (var importedFunc in module.Imports.OfType<Import.Function>())

@@ -1,5 +1,4 @@
 ﻿using System.Globalization;
-using System.Threading;
 using Wasm2cs.CodeGeneration.Exceptions;
 using Wasm2cs.CodeGeneration.Extensions;
 using WebAssembly;
@@ -7,13 +6,13 @@ using WebAssembly.Instructions;
 
 namespace Wasm2cs.CodeGeneration.Work;
 
-internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
+internal class ModuleFunction(Function Function, FunctionBody Body, uint Index)
     : IWorkItem
 {
     public async Task Emit(IndentedTextWriter writer, Module module)
     {
         var funcType = module.Types[(int)Function.Type];
-        var name = $"Function{Index}";
+        var name = NameConventions.Function(Index);
 
         await using (await writer.Method(
                          name,
@@ -24,22 +23,37 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
                      ))
         {
             // Create all locals
-            var localIdx = 0;
+            var localIdx = 0u;
             var locals = new List<(string localName, WebAssemblyValueType Type)>();
+
+            // Parameters
+            foreach (var paramType in funcType.Parameters)
+            {
+                var argName = NameConventions.FunctionArg(localIdx);
+                var localName = NameConventions.Local(localIdx++);
+                locals.Add((localName, paramType));
+                await writer.AppendLine($"{paramType} {localName} = {argName}");
+            }
+
+            // Explicit locals
             foreach (var local in Body.Locals)
             {
                 var localType = local.Type.ToDotnetType();
                 for (var i = 0; i < local.Count; i++)
                 {
-                    var localName = $"local_{localIdx++}";
+                    var localName = NameConventions.Local(localIdx++);
                     locals.Add((localName, local.Type));
                     await writer.AppendLine($"{localType} {localName} = default");
                 }
             }
 
+            // Some counters
+            var tmpVarIdx = 0u;
+            var blockIdx = 0u;
+
             // Emit instructions
             var stack = new StackBuilder(writer);
-            var scope = new ScopeChecker("implicit_func_start");
+            var scope = new ScopeChecker("implicit_func_block");
             foreach (var instruction in Body.Code)
             {
                 switch (instruction.OpCode)
@@ -56,11 +70,25 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
                         break;
                     }
 
+                    #region control flow
                     case OpCode.End:
                     {
-                        scope.Pop();
+                        await scope.Pop(writer);
                         break;
                     }
+
+                    case OpCode.Block:
+                    {
+                        await scope.EnterBlock(writer, NameConventions.BlockLabel(blockIdx++));
+                        break;
+                    }
+
+                    case OpCode.Loop:
+                    {
+                        await scope.EnterLoop(writer, NameConventions.BlockLabel(blockIdx++));
+                        break;
+                    }
+                    #endregion
 
                     #region int32
                     case OpCode.Int32Constant:
@@ -76,6 +104,74 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
                         var expr = $"{v} == 0 ? 1 : 0";
                         await stack.Push(WebAssemblyValueType.Int32, expr);
                         break;  
+                    }
+
+                    case OpCode.Int32WrapInt64:
+                    {
+                        var v = stack.Pop(WebAssemblyValueType.Int64);
+                        var expr = $"unchecked((int){v})";
+                        await stack.Push(WebAssemblyValueType.Int32, expr);
+                        break;
+                    }
+
+                    case OpCode.Int32LessThanSigned:
+                    {
+                        await EmitBinarySignedInt32Operator(stack, "<");
+                        break;
+                    }
+
+                    case OpCode.Int32LessThanUnsigned:
+                    {
+                        await EmitBinaryUnsignedInt32Operator(stack, "<");
+                        break;
+                    }
+
+                    case OpCode.Int32ShiftRightSigned:
+                    {
+                        await EmitBinaryUnsignedInt32Operator(stack, ">>>");
+                        break;
+                    }
+
+                    case OpCode.Int32ShiftRightUnsigned:
+                    {
+                        await EmitBinaryUnsignedInt32Operator(stack, ">>");
+                        break;
+                    }
+
+                    case OpCode.Int32And:
+                    {
+                        await EmitBinaryUnsignedInt32Operator(stack, "&");
+                        break;
+                    }
+
+                    case OpCode.Int32Or:
+                    {
+                        await EmitBinaryUnsignedInt32Operator(stack, "|");
+                        break;
+                    }
+
+                    case OpCode.Int32ExclusiveOr:
+                    {
+                        await EmitBinaryUnsignedInt32Operator(stack, "^");
+                        break;
+                    }
+
+                    case OpCode.Int32Add:
+                    {
+                        await EmitBinaryUnsignedInt32Operator(stack, "+");
+                        break;
+                    }
+
+                    case OpCode.Int32Subtract:
+                    {
+                        await EmitBinaryUnsignedInt32Operator(stack, "-");
+                        break;
+                    }
+
+                    case OpCode.Int32Multiply:
+                    {
+                        await EmitBinaryUnsignedInt32Operator(stack, "*");
+                        break;
                     }
                     #endregion
 
@@ -363,9 +459,30 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
                                       let localName = stack.Pop(parameter)
                                       select localName).ToArray();
 
-                        var callName = $"Function{call.Index}";
+                        var callName = NameConventions.Function(call.Index);
                         var parameters = string.Join(", ", inputs);
-                        await writer.AppendLine($"{callName}({parameters});");
+                        var expr = $"{callName}({parameters})";
+
+                        if (type.Returns.Count == 0)
+                        {
+                            await writer.AppendLine($"{expr};");
+                        }
+                        else if (type.Returns.Count == 1)
+                        {
+                            await stack.Push(type.Returns[0], expr);
+                        }
+                        else
+                        {
+                            // Make call, assigning results to temps
+                            var tmps = type.Returns.Select(type => (type, name:$"call_return_tmp{tmpVarIdx++}")).ToArray();
+                            var tuple = string.Join(", ", tmps.Select(a => $"{a.type} {a.name}"));
+                            await writer.AppendLine($"{tuple} = {expr};");
+
+                            // Push returned results to stack
+                            foreach (var item in tmps)
+                                await stack.Push(item.type, item.name);
+                        }
+
                         break;
                     }
 
@@ -418,8 +535,8 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
 
                     case OpCode.LocalTee:
                     {
-                        var localSet = (LocalSet)instruction;
-                        var local = locals[(int)localSet.Index];
+                        var localTee = (LocalTee)instruction;
+                        var local = locals[(int)localTee.Index];
                         var stackName = stack.Pop(local.Type);
                         await writer.AppendLine($"{stackName} = {local.localName};");
                         await stack.Push(local.Type, local.localName);
@@ -438,20 +555,36 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
 
                     case OpCode.GlobalSet:
                     {
-                        var globalGet = (GlobalGet)instruction;
-                        var global = module.Globals[(int)globalGet.Index];
+                        var globalSet = (GlobalSet)instruction;
+                        var global = module.Globals[(int)globalSet.Index];
                         if (!global.IsMutable)
-                            throw new CannotSetImmutableGlobal(globalGet.Index);
+                            throw new CannotSetImmutableGlobal(globalSet.Index);
 
                         var v = stack.Pop(global.ContentType);
-                        await writer.AppendLine($"_global_{globalGet.Index} = {v};");
+                        await writer.AppendLine($"_global_{globalSet.Index} = {v};");
 
                         break;
                     }
                     #endregion
 
-                    case OpCode.Block:
-                    case OpCode.Loop:
+                    #region memory
+                    case OpCode.MemorySize:
+                    {
+                        var n = NameConventions.Memory(0);
+                        await stack.Push(WebAssemblyValueType.Int32, $"{n}.Size");
+                        break;
+                    }
+
+                    case OpCode.MemoryGrow:
+                    {
+                        var n = NameConventions.Memory(0);
+                        var pages = stack.Pop(WebAssemblyValueType.Int32);
+                        var expr = $"{n}.Grow({pages})";
+                        await stack.Push(WebAssemblyValueType.Int32, expr);
+                        break;
+                    }
+                    #endregion
+
                     case OpCode.If:
                     case OpCode.Else:
                     case OpCode.Branch:
@@ -481,12 +614,8 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
                     case OpCode.Int64Store8:
                     case OpCode.Int64Store16:
                     case OpCode.Int64Store32:
-                    case OpCode.MemorySize:
-                    case OpCode.MemoryGrow:
                     case OpCode.Int32Equal:
                     case OpCode.Int32NotEqual:
-                    case OpCode.Int32LessThanSigned:
-                    case OpCode.Int32LessThanUnsigned:
                     case OpCode.Int32GreaterThanSigned:
                     case OpCode.Int32GreaterThanUnsigned:
                     case OpCode.Int32LessThanOrEqualSigned:
@@ -506,19 +635,12 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
                     case OpCode.Int32CountLeadingZeroes:
                     case OpCode.Int32CountTrailingZeroes:
                     case OpCode.Int32CountOneBits:
-                    case OpCode.Int32Add:
-                    case OpCode.Int32Subtract:
-                    case OpCode.Int32Multiply:
+                    
                     case OpCode.Int32DivideSigned:
                     case OpCode.Int32DivideUnsigned:
                     case OpCode.Int32RemainderSigned:
                     case OpCode.Int32RemainderUnsigned:
-                    case OpCode.Int32And:
-                    case OpCode.Int32Or:
-                    case OpCode.Int32ExclusiveOr:
                     case OpCode.Int32ShiftLeft:
-                    case OpCode.Int32ShiftRightSigned:
-                    case OpCode.Int32ShiftRightUnsigned:
                     case OpCode.Int32RotateLeft:
                     case OpCode.Int32RotateRight:
                     case OpCode.Int64CountLeadingZeroes:
@@ -539,7 +661,6 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
                     case OpCode.Int64ShiftRightUnsigned:
                     case OpCode.Int64RotateLeft:
                     case OpCode.Int64RotateRight:
-                    case OpCode.Int32WrapInt64:
                     case OpCode.Int32TruncateFloat32Signed:
                     case OpCode.Int32TruncateFloat32Unsigned:
                     case OpCode.Int32TruncateFloat64Signed:
@@ -569,9 +690,8 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
                     case OpCode.Int64Extend8Signed:
                     case OpCode.Int64Extend16Signed:
                     case OpCode.Int64Extend32Signed:
-                    case OpCode.MiscellaneousOperationPrefix:
                     default:
-                        throw new NotSupportedException($"Unknown OpCode: '{instruction.OpCode}'");
+                        throw new UnsupportedWasmInstructionException(instruction.OpCode);
                 }
             }
 
@@ -581,6 +701,7 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
 
         await writer.AppendLine();
 
+        #region emitters
         async Task EmitReturn(StackBuilder stack)
         {
             var returns = (from @return in funcType.Returns
@@ -619,6 +740,18 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
             await EmitBinaryTransform(stack, type, type, funcFormat);
         }
 
+        async Task EmitBinaryUnsignedInt32Operator(StackBuilder stack, string @operator)
+        {
+            var fmt = $"unchecked((uint){{0}}) {@operator} unchecked((uint){{1}})";
+            await EmitBinaryFunction(stack, WebAssemblyValueType.Int32, fmt);
+        }
+
+        async Task EmitBinarySignedInt32Operator(StackBuilder stack, string @operator)
+        {
+            var fmt = $"unchecked((int){{0}}) {@operator} unchecked((int){{1}})";
+            await EmitBinaryFunction(stack, WebAssemblyValueType.Int32, fmt);
+        }
+
         async Task EmitBinaryTransform(StackBuilder stack, WebAssemblyValueType typeIn, WebAssemblyValueType typeOut, string funcFormat)
         {
             var a = stack.Pop(typeIn);
@@ -626,6 +759,7 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
             var expr = string.Format(funcFormat, a, b);
             await stack.Push(typeOut, expr);
         }
+        #endregion
     }
 
     private class StackBuilder(IndentedTextWriter Writer)
@@ -680,22 +814,30 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
 
     private class ScopeChecker
     {
-        private readonly Stack<string> _scopes = [ ];
+        private readonly Stack<(bool, string)> _scopes = [ ];
 
-        public ScopeChecker(string? scope = null)
+        public ScopeChecker(string scope)
         {
-            if (scope != null)
-                Push(scope);
+            _scopes.Push((false, ""));
         }
 
-        public void Push(string scope)
+        public Task EnterBlock(IndentedTextWriter writer, string endLabel)
         {
-            _scopes.Push(scope);
+            _scopes.Push((true, endLabel));
+            return Task.CompletedTask;
         }
 
-        public void Pop()
+        public async Task EnterLoop(IndentedTextWriter writer, string startLabel)
         {
-            _scopes.Pop();
+            _scopes.Push((false, startLabel));
+            await writer.AppendLine($"{startLabel}: ;");
+        }
+
+        public async Task Pop(IndentedTextWriter writer)
+        {
+            var (needsWriting, label) = _scopes.Pop();
+            if (needsWriting)
+                await writer.AppendLine($"{label}: ;");
         }
 
         public void CheckEmpty()

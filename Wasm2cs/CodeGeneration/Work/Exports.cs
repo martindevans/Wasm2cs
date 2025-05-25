@@ -21,7 +21,8 @@ internal class FuncExport(Export function)
 
         await using (await writer.Method(function.Name, args: paramsArgs, returns: type.Returns.ReturnType()))
         {
-            await writer.AppendLine($"{@return} Function{function.Index}({callArgs});");
+            var funcName = NameConventions.Function(function.Index);
+            await writer.AppendLine($"{@return} {funcName}({callArgs});");
         }
         await writer.AppendLine();
     }

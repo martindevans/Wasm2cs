@@ -53,7 +53,7 @@ internal static class WebAssemblyValueTypeExtensions
     {
         var parameters = from item in types.Select((type, index) => new { type, index })
                          let dotnet = item.type.ToDotnetType()
-                         let name = $"arg{item.index}"
+                         let name = NameConventions.FunctionArg((uint)item.index)
                          select name;
 
         return parameters.ToArray();

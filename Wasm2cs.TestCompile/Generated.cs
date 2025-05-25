@@ -52,71 +52,71 @@ class HelloWorld
 
     public Int32 main()
     {
-        return Function2();
+        return Function_2();
     }
 
 
-    private void Function0(System.Int32 _param0)
+    private void Function_0(System.Int32 _param0)
     {
          _import_sayc(_param0);
     }
 
 
-    private void Function1()
+    private void Function_1()
     {
     }
 
 
-    private Int32 Function2()
+    private Int32 Function_2()
     {
         const System.Int32 stack0 = (72);
-        Function0(stack0);
+        Function_0(stack0);
         const System.Int32 stack1 = (101);
-        Function0(stack1);
+        Function_0(stack1);
         const System.Int32 stack2 = (108);
-        Function0(stack2);
+        Function_0(stack2);
         const System.Int32 stack3 = (108);
-        Function0(stack3);
+        Function_0(stack3);
         const System.Int32 stack4 = (111);
-        Function0(stack4);
+        Function_0(stack4);
         const System.Int32 stack5 = (32);
-        Function0(stack5);
+        Function_0(stack5);
         const System.Int32 stack6 = (87);
-        Function0(stack6);
+        Function_0(stack6);
         const System.Int32 stack7 = (111);
-        Function0(stack7);
+        Function_0(stack7);
         const System.Int32 stack8 = (114);
-        Function0(stack8);
+        Function_0(stack8);
         const System.Int32 stack9 = (108);
-        Function0(stack9);
+        Function_0(stack9);
         const System.Int32 stack10 = (100);
-        Function0(stack10);
+        Function_0(stack10);
         const System.Int32 stack11 = (32);
-        Function0(stack11);
+        Function_0(stack11);
         const System.Int32 stack12 = (40);
-        Function0(stack12);
+        Function_0(stack12);
         const System.Int32 stack13 = (102);
-        Function0(stack13);
+        Function_0(stack13);
         const System.Int32 stack14 = (114);
-        Function0(stack14);
+        Function_0(stack14);
         const System.Int32 stack15 = (111);
-        Function0(stack15);
+        Function_0(stack15);
         const System.Int32 stack16 = (109);
-        Function0(stack16);
+        Function_0(stack16);
         const System.Int32 stack17 = (32);
-        Function0(stack17);
+        Function_0(stack17);
         const System.Int32 stack18 = (87);
-        Function0(stack18);
+        Function_0(stack18);
         const System.Int32 stack19 = (65);
-        Function0(stack19);
+        Function_0(stack19);
         const System.Int32 stack20 = (83);
-        Function0(stack20);
+        Function_0(stack20);
         const System.Int32 stack21 = (77);
-        Function0(stack21);
+        Function_0(stack21);
         const System.Int32 stack22 = (41);
-        Function0(stack22);
+        Function_0(stack22);
         const System.Int32 stack23 = (10);
-        Function0(stack23);
+        Function_0(stack23);
         const System.Int32 stack24 = (0);
         return (stack24);
     }

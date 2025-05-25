@@ -11,6 +11,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Wasm2cs.Runtime", "Wasm2cs.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Wasm2cs.TestCompile", "Wasm2cs.TestCompile\Wasm2cs.TestCompile.csproj", "{054A2866-18F2-409C-9112-F3CF985C5E0D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Wasm2cs.Tests", "Wasm2cs.Tests\Wasm2cs.Tests.csproj", "{45A17A59-3905-40A1-B722-DF374C53F34C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Wasm2cs.Fuzzer", "Wasm2cs.Fuzzer\Wasm2cs.Fuzzer.csproj", "{C4391198-5E20-40A5-81AF-999BDEBE3067}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -33,8 +37,19 @@ Global
 		{054A2866-18F2-409C-9112-F3CF985C5E0D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{054A2866-18F2-409C-9112-F3CF985C5E0D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{054A2866-18F2-409C-9112-F3CF985C5E0D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{45A17A59-3905-40A1-B722-DF374C53F34C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{45A17A59-3905-40A1-B722-DF374C53F34C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{45A17A59-3905-40A1-B722-DF374C53F34C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{45A17A59-3905-40A1-B722-DF374C53F34C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C4391198-5E20-40A5-81AF-999BDEBE3067}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C4391198-5E20-40A5-81AF-999BDEBE3067}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C4391198-5E20-40A5-81AF-999BDEBE3067}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C4391198-5E20-40A5-81AF-999BDEBE3067}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {30CA3C78-EF10-4C41-A175-5A8331085497}
 	EndGlobalSection
 EndGlobal
