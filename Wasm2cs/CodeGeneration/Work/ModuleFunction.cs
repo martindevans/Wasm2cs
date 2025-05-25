@@ -1,4 +1,6 @@
-﻿using Wasm2cs.CodeGeneration.Extensions;
+﻿using System.Globalization;
+using Wasm2cs.CodeGeneration.Exceptions;
+using Wasm2cs.CodeGeneration.Extensions;
 using WebAssembly;
 using WebAssembly.Instructions;
 
@@ -22,14 +24,14 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
         {
             // Create all locals
             var localIdx = 0;
-            var localsNames = new List<string>();
-            foreach (var locals in Body.Locals)
+            var locals = new List<(string localName, WebAssemblyValueType Type)>();
+            foreach (var local in Body.Locals)
             {
-                var localType = locals.Type.ToDotnetType();
-                for (var i = 0; i < locals.Count; i++)
+                var localType = local.Type.ToDotnetType();
+                for (var i = 0; i < local.Count; i++)
                 {
                     var localName = $"local_{localIdx++}";
-                    localsNames.Add(localName);
+                    locals.Add((localName, local.Type));
                     await writer.AppendLine($"{localType} {localName} = default");
                 }
             }
@@ -41,6 +43,18 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
             {
                 switch (instruction.OpCode)
                 {
+                    case OpCode.NoOperation:
+                    {
+                        await writer.AppendLine("// nop");
+                        break;
+                    }
+
+                    case OpCode.Return:
+                    {
+                        await EmitReturn(stack);
+                        break;
+                    }
+
                     case OpCode.End:
                     {
                         scope.Pop();
@@ -51,6 +65,27 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
                     {
                         var ci32 = (Int32Constant)instruction;
                         await stack.Push(ci32.Value);
+                        break;
+                    }
+
+                    case OpCode.Int64Constant:
+                    {
+                        var ci64 = (Int64Constant)instruction;
+                        await stack.Push(ci64.Value);
+                        break;
+                    }
+
+                    case OpCode.Float32Constant:
+                    {
+                        var f32 = (Float32Constant)instruction;
+                        await stack.Push(f32.Value);
+                        break;
+                    }
+
+                    case OpCode.Float64Constant:
+                    {
+                        var f64 = (Float64Constant)instruction;
+                        await stack.Push(f64.Value);
                         break;
                     }
 
@@ -75,22 +110,100 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
                         break;
                     }
 
+                    case OpCode.Drop:
+                    {
+                        stack.Pop(out _);
+                        break;
+                    }
+
+                    #region locals
+                    case OpCode.LocalGet:
+                    {
+                        var localGet = (LocalGet)instruction;
+                        var local = locals[(int)localGet.Index];
+                        await stack.Push(local.Type, local.localName, false);
+                        break;
+                    }
+
+                    case OpCode.LocalSet:
+                    {
+                        var localSet = (LocalSet)instruction;
+                        var local = locals[(int)localSet.Index];
+                        var stackName = stack.Pop(local.Type);
+                        await writer.AppendLine($"{stackName} = {local.localName};");
+                        break;
+                    }
+
+                    case OpCode.LocalTee:
+                    {
+                        var localSet = (LocalSet)instruction;
+                        var local = locals[(int)localSet.Index];
+                        var stackName = stack.Pop(local.Type);
+                        await writer.AppendLine($"{stackName} = {local.localName};");
+                        await stack.Push(local.Type, local.localName, false);
+                        break;
+                    }
+                    #endregion
+
+                    #region globals
+                    case OpCode.GlobalGet:
+                    {
+                        var globalGet = (GlobalGet)instruction;
+                        var global = module.Globals[(int)globalGet.Index];
+                        await stack.Push(global.ContentType, $"_global_{globalGet.Index}", false);
+                        break;
+                    }
+
+                    case OpCode.GlobalSet:
+                    {
+                        var globalGet = (GlobalGet)instruction;
+                        var global = module.Globals[(int)globalGet.Index];
+                        if (!global.IsMutable)
+                            throw new CannotSetImmutableGlobal(globalGet.Index);
+
+                        var v = stack.Pop(global.ContentType);
+                        await writer.AppendLine($"_global_{globalGet.Index} = {v};");
+
+                        break;
+                    }
+                    #endregion
+
+                    case OpCode.Select:
+                    {
+                        // Pop 2 values of same type
+                        var a = stack.Pop(out var aType);
+                        var b = stack.Pop(out var bType);
+                        if (aType != bType)
+                            throw new SelectMismatchedTypesException(aType, bType);
+
+                        // Pop discriminator
+                        var c = stack.Pop(WebAssemblyValueType.Int32);
+
+                        // Select based on discriminator
+                        var expr = $"({c} != 0 ? {a} : {b})";
+                        await stack.Push(aType, expr, false);
+                        break;
+                    }
+
                     default:
                         throw new NotSupportedException($"Unknown OpCode: '{instruction.OpCode}'");
                 }
             }
 
-            // Pop function returns
+            await EmitReturn(stack);
+            scope.CheckEmpty();
+        }
+
+        await writer.AppendLine();
+
+        async Task EmitReturn(StackBuilder stack)
+        {
             var returns = (from @return in funcType.Returns
                            let localName = stack.Pop(@return)
                            select localName).ToArray();
             if (returns.Length != 0)
                 await writer.AppendLine($"return ({string.Join(", ", returns)});");
-
-            scope.CheckEmpty();
         }
-
-        await writer.AppendLine();
     }
 
     private class StackBuilder(IndentedTextWriter Writer)
@@ -98,6 +211,7 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
         private int _index;
         private readonly Stack<(WebAssemblyValueType, string)> _stack = [ ];
 
+        #region push
         public async Task Push(WebAssemblyValueType type, string value, bool @const)
         {
             var name = $"stack{_index++}";
@@ -110,11 +224,34 @@ internal class ModuleFunction(Function Function, FunctionBody Body, int Index)
             await Push(WebAssemblyValueType.Int32, value.ToString(), @const:true);
         }
 
+        public async Task Push(long value)
+        {
+            await Push(WebAssemblyValueType.Int64, value.ToString(), @const: true);
+        }
+
+        public async Task Push(float value)
+        {
+            await Push(WebAssemblyValueType.Float32, value.ToString(CultureInfo.InvariantCulture), @const: true);
+        }
+
+        public async Task Push(double value)
+        {
+            await Push(WebAssemblyValueType.Float64, value.ToString(CultureInfo.InvariantCulture), @const: true);
+        }
+        #endregion
+
         public string Pop(WebAssemblyValueType type)
         {
             var (t, n) = _stack.Pop();
             if (t != type)
                 throw new InvalidOperationException($"Tried to pop '{type}' but found '{t}'");
+            return n;
+        }
+
+        public string Pop(out WebAssemblyValueType type)
+        {
+            var (t, n) = _stack.Pop();
+            type = t;
             return n;
         }
     }

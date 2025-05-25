@@ -1,15 +1,18 @@
-﻿namespace Wasm2cs.Runtime;
+﻿using JetBrains.Annotations;
+
+namespace Wasm2cs.Runtime;
 
 public abstract class TrapException
     : Exception
 {
-    public TrapException(string message)
+    protected TrapException(string message)
         : base(message)
     {
         
     }
 }
 
+[UsedImplicitly]
 public sealed class UnreachableTrapException
     : TrapException
 {
