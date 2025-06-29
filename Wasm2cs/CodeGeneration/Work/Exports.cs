@@ -1,39 +1,34 @@
-﻿using System.Globalization;
-using Wasm2cs.CodeGeneration.Exceptions;
+﻿using Wacs.Core;
+using Wacs.Core.Types;
 using Wasm2cs.CodeGeneration.Extensions;
-using WebAssembly;
-using WebAssembly.Instructions;
 
 namespace Wasm2cs.CodeGeneration.Work;
 
-internal class FuncExport(Export function)
+internal class FuncExport(Module.Export function)
     : IWorkItem
 {
     public async Task Emit(IndentedTextWriter writer, Module module)
     {
-        var type = module.Types[(int)module.GetModuleFuncTypeIndex(function.Index)];
+        var desc = (Module.ExportDesc.FuncDesc)function.Desc;
+        var func = module.GetFunction(desc.FunctionIndex);
+        var type = (FunctionType)module.Types[func.TypeIndex.Value].SubTypes.Single().Body;
+        var name = NameConventions.Function(desc.FunctionIndex);
 
-        var @return = type.Returns.Count > 0 ? "return" : "";
+        var @return = type.ResultType.Arity > 0 ? "return" : "";
 
-        var paramsTypes = MethodParameterList(type.Parameters);
+        var paramsTypes = type.ParameterTypes.Types.Select(a => a.ToDotnetType().Name).ToList();
         var paramsArgs = paramsTypes.Select((t, i) => $"{t} _param{i}").ToList();
         var callArgs = string.Join(", ", paramsTypes.Select((_, i) => $"_param{i}").ToList());
 
-        await using (await writer.Method(function.Name, args: paramsArgs, returns: type.Returns.ReturnType()))
+        await using (await writer.Method(function.Name, args: paramsArgs, returns: type.ResultType.Types.ReturnType()))
         {
-            var funcName = NameConventions.Function(function.Index);
-            await writer.AppendLine($"{@return} {funcName}({callArgs});");
+            await writer.AppendLine($"{@return} {name}({callArgs});");
         }
         await writer.AppendLine();
     }
-
-    private static List<string> MethodParameterList(IList<WebAssemblyValueType> types)
-    {
-        return types.Select(a => a.ToDotnetType().Name).ToList();
-    }
 }
 
-internal class TableExport(Export table)
+internal class TableExport(Module.Export table)
     : IWorkItem
 {
     public Task Emit(IndentedTextWriter writer, Module module)
@@ -42,75 +37,38 @@ internal class TableExport(Export table)
     }
 }
 
-internal class GlobalExport(Export export)
+internal class GlobalExport(Module.Export export)
     : IWorkItem
 {
     public async Task Emit(IndentedTextWriter writer, Module module)
     {
-        var global = module.Globals[(int)export.Index];
+        var desc = (Module.ExportDesc.GlobalDesc)export.Desc;
+        var global = module.Globals[(int)desc.GlobalIndex.Value];
+        var dotnetType = global.Type.ContentType.ToDotnetType().Name;
+        var name = NameConventions.Global(global.Id);
 
-        var type = global.ContentType.ToDotnetType();
-
-        var initName = $"InitGlobal_{export.Name}";
-        await writer.Property(type, export.Name, true, global.IsMutable, initName);
-
-        await using (await writer.Method(initName, true, false, returns: type.FullName))
-            await writer.AppendLine($"return {GetGlobalInitializerValue(global.ContentType, global.InitializerExpression.ToList())};");
-
-        await writer.AppendLine();
-    }
-
-    private static string GetGlobalInitializerValue(WebAssemblyValueType type, IReadOnlyList<Instruction> instructions)
-    {
-        if (instructions[^1] is not End)
-            throw new FunctionDoesNotEndException();
-
-        switch (type)
+        await writer.AppendLine($"public {dotnetType} {export.Name}");
+        await using (await writer.Braces())
         {
-            case WebAssemblyValueType.Int32:
-            {
-                if (instructions[0] is not Int32Constant i32c)
-                    throw new InitializerIncorrectConstInstructionTypeException(instructions[0].OpCode);
-                return i32c.Value.ToString();
-            }
-
-            case WebAssemblyValueType.Int64:
-            {
-                if (instructions[0] is not Int64Constant i64c)
-                    throw new InitializerIncorrectConstInstructionTypeException(instructions[0].OpCode);
-                return i64c.Value.ToString();
-            }
-
-            case WebAssemblyValueType.Float32:
-            {
-                if (instructions[0] is not Float32Constant f32c)
-                    throw new InitializerIncorrectConstInstructionTypeException(instructions[0].OpCode);
-                return f32c.Value.ToString(CultureInfo.InvariantCulture);
-            }
-
-            case WebAssemblyValueType.Float64:
-            {
-                if (instructions[0] is not Float64Constant f64c)
-                    throw new InitializerIncorrectConstInstructionTypeException(instructions[0].OpCode);
-                return f64c.Value.ToString(CultureInfo.InvariantCulture);
-            }
-
-            default:
-                throw new InitializerIncorrectConstInstructionTypeException(instructions[0].OpCode);
+            await writer.AppendLine($"get => {name};");
+            if (global.Type.Mutability == Mutability.Mutable)
+                await writer.AppendLine($"set => {name} = value;");
         }
+        await writer.AppendLine();
     }
 }
 
-internal class MemoryExport(Export export)
+internal class MemoryExport(Module.Export export)
     : IWorkItem
 {
     public async Task Emit(IndentedTextWriter writer, Module module)
     {
-        var memory = module.Memories[(int)export.Index];
+        var desc = (Module.ExportDesc.MemDesc)export.Desc;
+        var memory = module.Memories[(int)desc.MemoryIndex.Value];
 
-        //todo: can this memory be imported? if so, need to handle that instead of just always constructing it here
-        await writer.AppendLine($"private readonly Memory _memory_{export.Name} = new Memory({memory.ResizableLimits.Minimum}, {memory.ResizableLimits.Maximum ?? uint.MaxValue});");
-        await writer.AppendLine($"public Memory {export.Name} => _memory_{export.Name};");
+        var name = NameConventions.Memory(memory.Id);
+
+        await writer.AppendLine($"public Memory {export.Name} => {name};");
         await writer.AppendLine();
     }
 }

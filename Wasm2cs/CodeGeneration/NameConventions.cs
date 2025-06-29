@@ -1,13 +1,31 @@
-﻿namespace Wasm2cs.CodeGeneration;
+﻿using Wacs.Core;
+using Wacs.Core.Types;
+
+namespace Wasm2cs.CodeGeneration;
 
 internal static class NameConventions
 {
-    public static string Memory(int index)
+    public static string Memory(string id)
     {
-        return $"Memory_{index}";
+        return $"Memory_{id}";
     }
 
-    public static string Function(uint index)
+    public static string Global(GlobalIdx id)
+    {
+        return $"Global_{id.Value}";
+    }
+
+    public static string Global(string id)
+    {
+        return $"Global_{id}";
+    }
+
+    public static string Function(FuncIdx index)
+    {
+        return $"Function_{index.Value}";
+    }
+
+    public static string Function(string index)
     {
         return $"Function_{index}";
     }
@@ -25,5 +43,10 @@ internal static class NameConventions
     public static string BlockLabel(uint index)
     {
         return $"block_label_{index}";
+    }
+
+    public static string ImportBackingField(Module.Import import)
+    {
+        return $"_import_{import.ModuleName}_{import.Name}";
     }
 }

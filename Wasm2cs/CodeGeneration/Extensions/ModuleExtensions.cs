@@ -1,19 +1,18 @@
-﻿using WebAssembly;
+﻿using Wacs.Core;
+using Wacs.Core.Types;
 
 namespace Wasm2cs.CodeGeneration.Extensions;
 
 internal static class ModuleExtensions
 {
-    public static uint GetModuleFuncTypeIndex(this Module module, uint index)
+    public static Module.Function GetFunction(this Module module, FuncIdx idx)
     {
-        var importedFunctions = from import in module.Imports
-                                where import.Kind == ExternalKind.Function
-                                let fi = (Import.Function)import
-                                select fi.TypeIndex;
+        var index = (int)idx.Value;
 
-        var otherFunctions = from function in module.Functions
-                             select function.Type;
+        if (index < module.ImportedFunctions.Count)
+            return module.ImportedFunctions[(int)index];
 
-        return importedFunctions.Concat(otherFunctions).ElementAt((int)index);
+        index -= module.ImportedFunctions.Count;
+        return module.Funcs[index];
     }
 }

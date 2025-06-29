@@ -1,41 +1,45 @@
-﻿using Wasm2cs.CodeGeneration.Extensions;
-using WebAssembly;
+﻿
+
+using Wacs.Core;
+using Wasm2cs.CodeGeneration.Extensions;
 
 namespace Wasm2cs.CodeGeneration.Work;
 
-internal class GlobalImportField(Import.Global global)
+internal class GlobalImportField(Module.Import global)
     : IWorkItem
 {
     public Task Emit(IndentedTextWriter writer, Module module)
     {
-        throw new NotImplementedException();
+        return Task.CompletedTask;
     }
 }
 
-internal class MemoryImportField(Import.Memory memory)
-    : IWorkItem
-{
-    public async Task Emit(IndentedTextWriter writer, Module module)
-    {
-        await writer.AppendLine($"private readonly Memory {memory.BackingFieldName()};");
-    }
-}
-
-internal class FuncImportField(Import.Function function)
-    : IWorkItem
-{
-    public async Task Emit(IndentedTextWriter writer, Module module)
-    {
-        var type = module.Types[(int)function.TypeIndex].FunctionObjectTypeSignature();
-        await writer.AppendLine($"private readonly {type} {function.BackingFieldName()};");
-    }
-}
-
-internal class TableImportField(Import.Table table)
+internal class MemoryImportField(Module.Import memory)
     : IWorkItem
 {
     public Task Emit(IndentedTextWriter writer, Module module)
     {
-        throw new NotImplementedException();
+        return Task.CompletedTask;
+    }
+}
+
+internal class FuncImportField(Module.Import function)
+    : IWorkItem
+{
+    public async Task Emit(IndentedTextWriter writer, Module module)
+    {
+        var desc = (Module.ImportDesc.FuncDesc)function.Desc;
+
+        var type = module.Types[desc.TypeIndex.Value].FunctionObjectTypeSignature();
+        await writer.AppendLine($"private readonly {type} {NameConventions.ImportBackingField(function)};");
+    }
+}
+
+internal class TableImportField(Module.Import table)
+    : IWorkItem
+{
+    public Task Emit(IndentedTextWriter writer, Module module)
+    {
+        return Task.CompletedTask;
     }
 }

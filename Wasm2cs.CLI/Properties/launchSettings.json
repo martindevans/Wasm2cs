@@ -2,7 +2,7 @@
   "profiles": {
     "Wasm2cs.CLI": {
       "commandName": "Project",
-      "commandLineArgs": "Examples/HelloWorld.wasm -o ../../../../Wasm2cs.TestCompile/Generated.cs"
+      "commandLineArgs": "Examples/python3.13_async.wasm -o ../../../../Wasm2cs.TestCompile/Generated.cs"
     }
   }
 }

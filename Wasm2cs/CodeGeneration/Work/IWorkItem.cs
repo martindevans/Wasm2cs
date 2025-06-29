@@ -1,4 +1,4 @@
-﻿using WebAssembly;
+﻿using Wacs.Core;
 
 namespace Wasm2cs.CodeGeneration.Work;
 

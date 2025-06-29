@@ -20,11 +20,11 @@ public class Wasm2csEngine
                 await WasmConverter.Convert("ConvertedClass", "FuzzCompile", new MemoryStream(program), writer);
             code = output.ToString();
         }
-        catch (UnsupportedWasmInstructionException ex)
-        {
-            Console.WriteLine($"Unsupported: {ex.OpCode}");
-            return new RunResult { IndeterminateResult = true };
-        }
+        //catch (UnsupportedWasmInstructionException ex)
+        //{
+        //    Console.WriteLine($"Unsupported: {ex.OpCode}");
+        //    return new RunResult { IndeterminateResult = true };
+        //}
         catch (Exception ex)
         {
             Console.WriteLine(ex);

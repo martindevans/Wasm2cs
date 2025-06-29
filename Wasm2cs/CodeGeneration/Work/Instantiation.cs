@@ -1,5 +1,5 @@
-﻿using Wasm2cs.CodeGeneration.Extensions;
-using WebAssembly;
+﻿using Wacs.Core;
+using Wasm2cs.CodeGeneration.Extensions;
 
 namespace Wasm2cs.CodeGeneration.Work;
 
@@ -30,7 +30,7 @@ internal class Instantiation
             await using (await writer.Constructor(_className, args: argsParams, @public: false))
             {
                 foreach (var import in _module.Imports)
-                    await writer.AppendLine($"{import.BackingFieldName()} = {import.Field};");
+                    await writer.AppendLine($"{NameConventions.ImportBackingField(import)} = {import.Name};");
             }
         }
     }
@@ -42,29 +42,31 @@ internal class Instantiation
 
         foreach (var moduleImport in module.Imports)
         {
-            var name = $"{moduleImport.Field}";
-            switch (moduleImport)
+            var desc = moduleImport.Desc;
+
+            var name = $"{moduleImport.Name}";
+            switch (desc)
             {
-                case Import.Function func:
-                {
-                    var type = module.Types[(int)func.TypeIndex];
-                    var typeSignature = type.FunctionObjectTypeSignature();
-                    @params.Add(typeSignature + " " + name);
-                    names.Add(name);
-                    break;
-                }
+                case Module.ImportDesc.FuncDesc func:
+                    {
+                        var type = module.Types[func.TypeIndex.Value];
+                        var typeSignature = type.FunctionObjectTypeSignature();
+                        @params.Add(typeSignature + " " + name);
+                        names.Add(name);
+                        break;
+                    }
 
-                case Import.Global global:
-                    throw new NotImplementedException();
+                case Module.ImportDesc.GlobalDesc global:
+                    throw new NotImplementedException("global import");
 
-                case Import.Memory memory:
-                    throw new NotImplementedException();
+                case Module.ImportDesc.MemDesc memory:
+                    throw new NotImplementedException("memory import");
 
-                case Import.Table table:
-                    throw new NotImplementedException();
+                case Module.ImportDesc.TableDesc table:
+                    throw new NotImplementedException("table import");
 
                 default:
-                    throw new NotImplementedException($"Unkown import type {moduleImport.Kind}");
+                    throw new NotSupportedException($"Unkown import type: {moduleImport}");
             }
         }
 

@@ -7,9 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Spectre.Console" Version="0.49.1" />
-    <PackageReference Include="Spectre.Console.Cli" Version="0.49.1" />
-    <PackageReference Include="WebAssembly" Version="1.2.1" />
+    <PackageReference Include="WACS" Version="0.7.4" />
   </ItemGroup>
 
 </Project>

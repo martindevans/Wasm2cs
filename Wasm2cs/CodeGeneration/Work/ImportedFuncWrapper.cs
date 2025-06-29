@@ -1,25 +1,27 @@
-﻿using Wasm2cs.CodeGeneration.Extensions;
-using WebAssembly;
+﻿using Wacs.Core;
+using Wacs.Core.Types;
+using Wasm2cs.CodeGeneration.Extensions;
 
 namespace Wasm2cs.CodeGeneration.Work;
 
-internal class ImportedFuncWrapper(Import.Function Import, uint Index)
+internal class ImportedFuncWrapper(Module.Import Import)
     : IWorkItem
 {
     public async Task Emit(IndentedTextWriter writer, Module module)
     {
-        var type = module.Types[(int)Import.TypeIndex];
+        var desc = (Module.ImportDesc.FuncDesc)Import.Desc;
+        var type = (FunctionType)module.Types[(int)desc.TypeIndex.Value].SubTypes.Single().Body;
 
-        var @return = type.Returns.Count > 0 ? "return " : "";
+        var @return = type.ResultType.Arity > 0 ? "return " : "";
 
-        var paramsTypes = type.Parameters.Select(a => a.ToDotnetType()).ToArray();
+        var paramsTypes = type.ParameterTypes.Types.Select(a => a.ToDotnetType().Name).ToArray();
         var paramsArgs = paramsTypes.Select((t, i) => $"{t} _param{i}").ToList();
         var callArgs = string.Join(", ", paramsTypes.Select((_, i) => $"_param{i}").ToList());
 
-        var backingField = Import.BackingFieldName();
+        var backingField = NameConventions.ImportBackingField(Import);
 
-        var funcName = NameConventions.Function(Index);
-        await using (await writer.Method(funcName, @public:false, args: paramsArgs, returns: type.Returns.ReturnType()))
+        var funcName = NameConventions.Function(desc.Id);
+        await using (await writer.Method(funcName, @public: false, args: paramsArgs, returns: type.ResultType.Types.ReturnType()))
         {
             await writer.AppendLine($"{@return} {backingField}({callArgs});");
         }

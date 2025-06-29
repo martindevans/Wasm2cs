@@ -2,12 +2,12 @@
 
 public class Memory
 {
-    public int Minimum { get; }
-    public uint Maximum { get; }
+    public uint Minimum { get; }
+    public uint? Maximum { get; }
 
     public int Size { get; }
 
-    public Memory(int minimum, uint maximum)
+    public Memory(uint minimum, uint? maximum)
     {
         Minimum = minimum;
         Maximum = maximum;
@@ -22,5 +22,35 @@ public class Memory
     public int Grow(int pages)
     {
         return -1;
+    }
+
+    public int ReadI32(int addr)
+    {
+        throw new NotImplementedException();
+    }
+
+    public int WriteI32(int value, int addr)
+    {
+        throw new NotImplementedException();
+    }
+
+    public byte ReadI8(int addr)
+    {
+        throw new NotImplementedException();
+    }
+
+    public byte ReadU8(int addr)
+    {
+        throw new NotImplementedException();
+    }
+
+    public byte ReadI16(int addr)
+    {
+        throw new NotImplementedException();
+    }
+
+    public byte ReadU16(int addr)
+    {
+        throw new NotImplementedException();
     }
 }

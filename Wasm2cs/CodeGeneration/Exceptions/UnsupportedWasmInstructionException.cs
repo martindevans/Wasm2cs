@@ -1,4 +1,4 @@
-﻿using WebAssembly;
+﻿using Wacs.Core.OpCodes;
 
 namespace Wasm2cs.CodeGeneration.Exceptions;
 

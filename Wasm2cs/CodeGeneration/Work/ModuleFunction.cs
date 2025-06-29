@@ -1,50 +1,62 @@
-﻿using System.Globalization;
+﻿using System;
+using System.Globalization;
+using System.Numerics;
+using Wacs.Core;
+using Wacs.Core.Instructions;
+using Wacs.Core.Instructions.Memory;
+using Wacs.Core.Instructions.Numeric;
+using Wacs.Core.OpCodes;
+using Wacs.Core.Types;
+using Wacs.Core.Types.Defs;
 using Wasm2cs.CodeGeneration.Exceptions;
 using Wasm2cs.CodeGeneration.Extensions;
-using WebAssembly;
-using WebAssembly.Instructions;
 
 namespace Wasm2cs.CodeGeneration.Work;
 
-internal class ModuleFunction(Function Function, FunctionBody Body, uint Index)
+internal class ModuleFunction(Module.Function Function)
     : IWorkItem
 {
     public async Task Emit(IndentedTextWriter writer, Module module)
     {
-        var funcType = module.Types[(int)Function.Type];
-        var name = NameConventions.Function(Index);
+        var funcType = (FunctionType)module.Types[Function.TypeIndex.Value].SubTypes.Single().Body;
+        var name = NameConventions.Function(Function.Index);
 
         await using (await writer.Method(
                          name,
                          @static: false,
                          @public: false,
-                         funcType.Parameters.ParameterList(),
-                         funcType.Returns.ReturnType()
+                         funcType.ParameterTypes.Types.ParameterList(),
+                         funcType.ResultType.Types.ReturnType()
                      ))
         {
+            // Suppress some warnings
+            await writer.AppendLine("#pragma warning disable IDE0059 // Unnecessary assignment of a value");
+            await writer.AppendLine("// ReSharper disable RedundantNameQualifier");
+            await writer.AppendLine("// ReSharper disable BuiltInTypeReferenceStyle");
+            await writer.AppendLine("// ReSharper disable SuggestVarOrType_BuiltInTypes");
+            await writer.AppendLine("// ReSharper disable InlineTemporaryVariable");
+            await writer.AppendLine("// ReSharper disable ConvertToConstant.Local");
+            await writer.AppendLine("");
+
             // Create all locals
             var localIdx = 0u;
-            var locals = new List<(string localName, WebAssemblyValueType Type)>();
+            var locals = new List<(string localName, ValType Type)>();
 
             // Parameters
-            foreach (var paramType in funcType.Parameters)
+            foreach (var paramType in funcType.ParameterTypes.Types)
             {
                 var argName = NameConventions.FunctionArg(localIdx);
                 var localName = NameConventions.Local(localIdx++);
                 locals.Add((localName, paramType));
-                await writer.AppendLine($"{paramType} {localName} = {argName}");
+                await writer.AppendLine($"{paramType.ToDotnetType().Name} {localName} = {argName};");
             }
 
             // Explicit locals
-            foreach (var local in Body.Locals)
+            foreach (var local in Function.Locals)
             {
-                var localType = local.Type.ToDotnetType();
-                for (var i = 0; i < local.Count; i++)
-                {
-                    var localName = NameConventions.Local(localIdx++);
-                    locals.Add((localName, local.Type));
-                    await writer.AppendLine($"{localType} {localName} = default");
-                }
+                var localName = NameConventions.Local(localIdx++);
+                locals.Add((localName, local));
+                await writer.AppendLine($"{local.ToDotnetType().Name} {localName} = default;");
             }
 
             // Some counters
@@ -53,645 +65,971 @@ internal class ModuleFunction(Function Function, FunctionBody Body, uint Index)
 
             // Emit instructions
             var stack = new StackBuilder(writer);
-            var scope = new ScopeChecker("implicit_func_block");
-            foreach (var instruction in Body.Code)
+            var scope = new ScopeChecker();
+            var instructions = Function.Body.Flatten().ToArray();
+            for (var i = 0; i < instructions.Length; i++)
             {
-                switch (instruction.OpCode)
+                var instruction = instructions[i];
+            
+                await writer.AppendLine($"// {instruction.Op.x00}");
+
+                switch (instruction.Op.x00)
                 {
-                    case OpCode.NoOperation:
-                    {
-                        await writer.AppendLine("// nop");
-                        break;
-                    }
+                    case OpCode.Nop:
+                        {
+                            await writer.AppendLine("// nop");
+                            break;
+                        }
 
                     case OpCode.Return:
-                    {
-                        await EmitReturn(stack);
-                        break;
-                    }
+                        {
+                            await EmitReturn(stack);
+                            break;
+                        }
 
                     #region control flow
                     case OpCode.End:
-                    {
-                        await scope.Pop(writer);
-                        break;
-                    }
+                        {
+                            await scope.Pop(writer);
+                            break;
+                        }
 
                     case OpCode.Block:
-                    {
-                        await scope.EnterBlock(writer, NameConventions.BlockLabel(blockIdx++));
-                        break;
-                    }
+                        {
+                            await scope.EnterBlock(writer, NameConventions.BlockLabel(blockIdx++));
+                            break;
+                        }
 
                     case OpCode.Loop:
-                    {
-                        await scope.EnterLoop(writer, NameConventions.BlockLabel(blockIdx++));
-                        break;
-                    }
+                        {
+                            await scope.EnterLoop(writer, NameConventions.BlockLabel(blockIdx++));
+                            break;
+                        }
                     #endregion
 
                     #region int32
-                    case OpCode.Int32Constant:
+                    case OpCode.I32Const:
                     {
-                        var ci32 = (Int32Constant)instruction;
+                        var ci32 = (InstI32Const)instruction;
                         await stack.Push(ci32.Value);
                         break;
                     }
 
-                    case OpCode.Int32EqualZero:
+                    case OpCode.I32WrapI64:
                     {
-                        var v = stack.Pop(WebAssemblyValueType.Int32);
-                        var expr = $"{v} == 0 ? 1 : 0";
-                        await stack.Push(WebAssemblyValueType.Int32, expr);
-                        break;  
-                    }
-
-                    case OpCode.Int32WrapInt64:
-                    {
-                        var v = stack.Pop(WebAssemblyValueType.Int64);
+                        var v = stack.Pop(ValType.I64);
                         var expr = $"unchecked((int){v})";
-                        await stack.Push(WebAssemblyValueType.Int32, expr);
+                        await stack.Push(ValType.I32, expr);
                         break;
                     }
 
-                    case OpCode.Int32LessThanSigned:
+                    case OpCode.I32Eq:
                     {
-                        await EmitBinarySignedInt32Operator(stack, "<");
+                        await EmitInequality(stack, "==", unsigned: true);
                         break;
                     }
 
-                    case OpCode.Int32LessThanUnsigned:
+                    case OpCode.I32Eqz:
                     {
-                        await EmitBinaryUnsignedInt32Operator(stack, "<");
+                        var v = stack.Pop(ValType.I32);
+                        var expr = $"{v} == 0 ? 1 : 0";
+                        await stack.Push(ValType.I32, expr);
                         break;
                     }
 
-                    case OpCode.Int32ShiftRightSigned:
+                    case OpCode.I32Ne:
                     {
-                        await EmitBinaryUnsignedInt32Operator(stack, ">>>");
+                        await EmitInequality(stack, "!=", unsigned: true);
                         break;
                     }
 
-                    case OpCode.Int32ShiftRightUnsigned:
+                    case OpCode.I32LtS:
                     {
-                        await EmitBinaryUnsignedInt32Operator(stack, ">>");
+                        await EmitBinaryTransform(stack, ValType.I32, ValType.I32, "({0} < {1} ? 1 : 0)");
                         break;
                     }
 
-                    case OpCode.Int32And:
+                    case OpCode.I32LtU:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I32, ValType.I32, "((uint){0} < (uint){1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I32GtS:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I32, ValType.I32, "({0} > {1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I32GtU:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I32, ValType.I32, "((uint){0} > (uint){1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I32LeS:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I32, ValType.I32, "({0} <= {1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I32LeU:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I32, ValType.I32, "((uint){0} <= (uint){1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I32GeS:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I32, ValType.I32, "({0} >= {1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I32GeU:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I32, ValType.I32, "((uint){0} >= (uint){1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I32And:
                     {
                         await EmitBinaryUnsignedInt32Operator(stack, "&");
                         break;
                     }
 
-                    case OpCode.Int32Or:
+                    case OpCode.I32Or:
                     {
                         await EmitBinaryUnsignedInt32Operator(stack, "|");
                         break;
                     }
 
-                    case OpCode.Int32ExclusiveOr:
+                    case OpCode.I32Xor:
                     {
                         await EmitBinaryUnsignedInt32Operator(stack, "^");
                         break;
                     }
 
-                    case OpCode.Int32Add:
+                    case OpCode.I32Add:
                     {
-                        await EmitBinaryUnsignedInt32Operator(stack, "+");
+                        await EmitBinarySignedInt32Operator(stack, "+");
                         break;
                     }
 
-                    case OpCode.Int32Subtract:
+                    case OpCode.I32Sub:
                     {
-                        await EmitBinaryUnsignedInt32Operator(stack, "-");
+                        await EmitBinarySignedInt32Operator(stack, "-");
                         break;
                     }
 
-                    case OpCode.Int32Multiply:
+                    case OpCode.I32Mul:
                     {
-                        await EmitBinaryUnsignedInt32Operator(stack, "*");
+                        await EmitBinaryFunction(stack, ValType.I32, "unchecked({0} * {1})");
+                        break;
+                    }
+
+                    case OpCode.I32Shl:
+                    {
+                        await EmitBinarySignedInt32Operator(stack, "<<");
+                        break;
+                    }
+
+                    case OpCode.I32ShrU:
+                    {
+                        await EmitBinaryFunction(
+                            stack,
+                            ValType.I32,
+                            "unchecked((int)((uint){0}) >> ((int){1}))"
+                        );
+                        break;
+                    }
+
+                    case OpCode.I32ShrS:
+                    {
+                        await EmitBinarySignedInt32Operator(stack, ">>>");
+                        break;
+                    }
+
+                    case OpCode.I32Rotl:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I32, ValType.I32, "BitOperations.RotateLeft({0}, {1})");
+                        break;
+                    }
+
+                    case OpCode.I32Rotr:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I32, ValType.I32, "BitOperations.RotateRight({0}, {1})");
+                        break;
+                    }
+
+                    case OpCode.I32Clz:
+                    {
+                        await EmitUnaryTransform(stack, ValType.I32, ValType.I32, "BitOperations.LeadingZeroCount(unchecked((uint){0}))");
+                        break;
+                    }
+
+                    case OpCode.I32Ctz:
+                    {
+                        await EmitUnaryTransform(stack, ValType.I32, ValType.I32, "BitOperations.TrailingZeroCount(unchecked((uint){0}))");
+                        break;
+                    }
+
+                    case OpCode.I32Popcnt:
+                    {
+                        await EmitUnaryTransform(stack, ValType.I32, ValType.I32, "BitOperations.PopCount(unchecked((uint){0}))");
                         break;
                     }
                     #endregion
 
                     #region int64
-                    case OpCode.Int64Constant:
+                    case OpCode.I64Const:
                     {
-                        var ci64 = (Int64Constant)instruction;
-                        await stack.Push(ci64.Value);
+                        var ci64 = (InstI64Const)instruction;
+                        await stack.Push(ci64.GetValue());
                         break;
                     }
 
-                    case OpCode.Int64EqualZero:
+                    case OpCode.I64Eqz:
                     {
-                        var v = stack.Pop(WebAssemblyValueType.Int64);
-                        var expr = $"{v} == 0 ? 1 : 0";
-                        await stack.Push(WebAssemblyValueType.Int32, expr);
+                        var v = stack.Pop(ValType.I64);
+                        var expr = $"{v} == 0L ? 1 : 0";
+                        await stack.Push(ValType.I32, expr);
+                        break;
+                    }
+
+                    case OpCode.I64Eq:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I64, ValType.I32, "({0} == {1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I64Ne:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I64, ValType.I32, "({0} != {1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I64LtS:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I64, ValType.I32, "({0} < {1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I64LtU:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I64, ValType.I32, "((ulong){0} < (ulong){1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I64GtS:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I64, ValType.I32, "({0} > {1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I64GtU:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I64, ValType.I32, "((ulong){0} > (ulong){1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I64LeS:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I64, ValType.I32, "({0} <= {1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I64LeU:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I64, ValType.I32, "((ulong){0} <= (ulong){1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I64GeS:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I64, ValType.I32, "({0} >= {1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I64GeU:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I64, ValType.I32, "((ulong){0} >= (ulong){1} ? 1 : 0)");
+                        break;
+                    }
+
+                    case OpCode.I64Clz:
+                    {
+                        await EmitUnaryTransform(stack, ValType.I64, ValType.I64, "BitOperations.LeadingZeroCount({0})");
+                        break;
+                    }
+
+                    case OpCode.I64Ctz:
+                    {
+                        await EmitUnaryTransform(stack, ValType.I64, ValType.I64, "BitOperations.TrailingZeroCount({0})");
+                        break;
+                    }
+
+                    case OpCode.I64Popcnt:
+                    {
+                        await EmitUnaryTransform(stack, ValType.I64, ValType.I64, "BitOperations.PopCount({0})");
+                        break;
+                    }
+
+                    case OpCode.I64Add:
+                    {
+                        await EmitBinaryFunction(stack, ValType.I64, "unchecked({0} + {1})");
+                        break;
+                    }
+
+                    case OpCode.I64Sub:
+                    {
+                        await EmitBinaryFunction(stack, ValType.I64, "unchecked({0} - {1})");
+                        break;
+                    }
+
+                    case OpCode.I64Mul:
+                    {
+                        await EmitBinaryFunction(stack, ValType.I64, "unchecked({0} * {1})");
+                        break;
+                    }
+
+                    case OpCode.I64Rotl:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I64, ValType.I64, "BitOperations.RotateLeft({0}, {1})");
+                        break;
+                    }
+
+                    case OpCode.I64Rotr:
+                    {
+                        await EmitBinaryTransform(stack, ValType.I64, ValType.I64, "BitOperations.RotateRight({0}, {1})");
+                        break;
+                    }
+
+                    case OpCode.I64And:
+                    {
+                        await EmitBinaryFunction(stack, ValType.I64, "{0} & {1}");
+                        break;
+                    }
+
+                    case OpCode.I64Or:
+                    {
+                        await EmitBinaryFunction(stack, ValType.I64, "{0} | {1}");
+                        break;
+                    }
+
+                    case OpCode.I64Xor:
+                    {
+                        await EmitBinaryFunction(stack, ValType.I64, "{0} ^ {1}");
+                        break;
+                    }
+
+                    case OpCode.I64Shl:
+                    {
+                        await EmitBinaryFunction(stack, ValType.I64, "{0} << (int)({1} & 63)");
+                        break;
+                    }
+
+                    case OpCode.I64ShrS:
+                    {
+                        await EmitBinaryFunction(stack, ValType.I64, "{0} >> (int)({1} & 63)");
+                        break;
+                    }
+
+                    case OpCode.I64ShrU:
+                    {
+                        await EmitBinaryFunction(
+                            stack,
+                            ValType.I64,
+                            "unchecked((long)((ulong){0} >> (int)({1} & 63)))"
+                        );
                         break;
                     }
                     #endregion
 
                     #region float32
-                    case OpCode.Float32Constant:
-                    {
-                        var f32 = (Float32Constant)instruction;
-                        await stack.Push(f32.Value);
-                        break;
-                    }
+                    case OpCode.F32Const:
+                        {
+                            var f32 = (InstF32Const)instruction;
+                            await stack.Push(f32.GetValue());
+                            break;
+                        }
 
-                    case OpCode.Float32Absolute:
-                    {
-                        await EmitPrefixUnaryFunction(stack, WebAssemblyValueType.Float32, "MathF.Abs");
-                        break;
-                    }
+                    case OpCode.F32Eq:
+                        {
+                            await EmitBinaryTransform(stack, ValType.F32, ValType.I32, "({0} == {1} ? 1 : 0)");
+                            break;
+                        }
 
-                    case OpCode.Float32Negate:
-                    {
-                        await EmitPrefixUnaryFunction(stack, WebAssemblyValueType.Float32, "-");
-                        break;
-                    }
+                    case OpCode.F32Ne:
+                        {
+                            await EmitBinaryTransform(stack, ValType.F32, ValType.I32, "({0} != {1} ? 1 : 0)");
+                            break;
+                        }
 
-                    case OpCode.Float32Ceiling:
-                    {
-                        await EmitPrefixUnaryFunction(stack, WebAssemblyValueType.Float64, "MathF.Ceiling");
-                        break;
-                    }
+                    case OpCode.F32Lt:
+                        {
+                            await EmitBinaryTransform(stack, ValType.F32, ValType.I32, "({0} < {1} ? 1 : 0)");
+                            break;
+                        }
 
-                    case OpCode.Float32Floor:
-                    {
-                        await EmitPrefixUnaryFunction(stack, WebAssemblyValueType.Float32, "MathF.Floor");
-                        break;
-                    }
+                    case OpCode.F32Gt:
+                        {
+                            await EmitBinaryTransform(stack, ValType.F32, ValType.I32, "({0} > {1} ? 1 : 0)");
+                            break;
+                        }
 
-                    case OpCode.Float32Truncate:
-                    {
-                        await EmitPrefixUnaryFunction(stack, WebAssemblyValueType.Float32, "MathF.Truncate");
-                        break;
-                    }
+                    case OpCode.F32Le:
+                        {
+                            await EmitBinaryTransform(stack, ValType.F32, ValType.I32, "({0} <= {1} ? 1 : 0)");
+                            break;
+                        }
 
-                    case OpCode.Float32Nearest:
-                    {
-                        await EmitUnaryFunction(stack, WebAssemblyValueType.Float32, "MathF.Round({0}, MidpointRounding.ToEven)");
-                        break;
-                    }
+                    case OpCode.F32Ge:
+                        {
+                            await EmitBinaryTransform(stack, ValType.F32, ValType.I32, "({0} >= {1} ? 1 : 0)");
+                            break;
+                        }
 
-                    case OpCode.Float32SquareRoot:
-                    {
-                        await EmitPrefixUnaryFunction(stack, WebAssemblyValueType.Float32, "MathF.Sqrt");
-                        break;
-                    }
+                    case OpCode.F32Abs:
+                        {
+                            await EmitPrefixUnaryTransform(stack, ValType.F32, ValType.F32, "MathF.Abs");
+                            break;
+                        }
 
-                    case OpCode.Float32Add:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float32, "{0} + {1}");
-                        break;
-                    }
+                    case OpCode.F32Neg:
+                        {
+                            await EmitPrefixUnaryTransform(stack, ValType.F32, ValType.F32, "-");
+                            break;
+                        }
 
-                    case OpCode.Float32Subtract:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float32, "{0} - {1}");
-                        break;
-                    }
+                    case OpCode.F32Ceil:
+                        {
+                            await EmitPrefixUnaryTransform(stack, ValType.F32, ValType.F32, "MathF.Ceiling");
+                            break;
+                        }
 
-                    case OpCode.Float32Multiply:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float32, "{0} * {1}");
-                        break;
-                    }
+                    case OpCode.F32Floor:
+                        {
+                            await EmitPrefixUnaryTransform(stack, ValType.F32, ValType.F32, "MathF.Floor");
+                            break;
+                        }
 
-                    case OpCode.Float32Divide:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float32, "{0} / {1}");
-                        break;
-                    }
+                    case OpCode.F32Trunc:
+                        {
+                            await EmitPrefixUnaryTransform(stack, ValType.F32, ValType.F32, "MathF.Truncate");
+                            break;
+                        }
 
-                    case OpCode.Float32Minimum:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float32, "MathF.Min({0}, {1})");
-                        break;
-                    }
+                    case OpCode.F32Nearest:
+                        {
+                            await EmitUnaryTransform(stack, ValType.F32, ValType.F32, "MathF.Round({0}, MidpointRounding.ToEven)");
+                            break;
+                        }
 
-                    case OpCode.Float32Maximum:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float32, "MathF.Max({0}, {1})");
-                        break;
-                    }
+                    case OpCode.F32Sqrt:
+                        {
+                            await EmitPrefixUnaryTransform(stack, ValType.F32, ValType.F32, "MathF.Sqrt");
+                            break;
+                        }
 
-                    case OpCode.Float32CopySign:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float32, "MathF.CopySign({0}, {1})");
-                        break;
-                    }
+                    case OpCode.F32Add:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F32, "{0} + {1}");
+                            break;
+                        }
 
-                    case OpCode.Float32Equal:
-                    {
-                        await EmitBinaryTransform(stack, WebAssemblyValueType.Float32, WebAssemblyValueType.Int32, "({0} == {1}) ? 1 : 0");
-                        break;
-                    }
+                    case OpCode.F32Sub:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F32, "{0} - {1}");
+                            break;
+                        }
 
-                    case OpCode.Float32NotEqual:
-                    {
-                        await EmitBinaryTransform(stack, WebAssemblyValueType.Float32, WebAssemblyValueType.Int32, "({0} != {1}) ? 1 : 0");
-                        break;
-                    }
+                    case OpCode.F32Mul:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F32, "{0} * {1}");
+                            break;
+                        }
 
-                    case OpCode.Float32LessThan:
-                    {
-                        await EmitBinaryTransform(stack, WebAssemblyValueType.Float32, WebAssemblyValueType.Int32, "({0} < {1}) ? 1 : 0");
-                        break;
-                    }
+                    case OpCode.F32Div:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F32, "{0} / {1}");
+                            break;
+                        }
 
-                    case OpCode.Float32GreaterThan:
-                    {
-                        await EmitBinaryTransform(stack, WebAssemblyValueType.Float32, WebAssemblyValueType.Int32, "({0} > {1}) ? 1 : 0");
-                        break;
-                    }
+                    case OpCode.F32Min:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F32, "MathF.Min({0}, {1})");
+                            break;
+                        }
 
-                    case OpCode.Float32LessThanOrEqual:
-                    {
-                        await EmitBinaryTransform(stack, WebAssemblyValueType.Float32, WebAssemblyValueType.Int32, "({0} <= {1}) ? 1 : 0");
-                        break;
-                    }
+                    case OpCode.F32Max:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F32, "MathF.Max({0}, {1})");
+                            break;
+                        }
 
-                    case OpCode.Float32GreaterThanOrEqual:
-                    {
-                        await EmitBinaryTransform(stack, WebAssemblyValueType.Float32, WebAssemblyValueType.Int32, "({0} >= {1}) ? 1 : 0");
-                        break;
-                    }
+                    case OpCode.F32Copysign:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F32, "MathF.CopySign({0}, {1})");
+                            break;
+                        }
                     #endregion
 
                     #region float64
-                    case OpCode.Float64Constant:
-                    {
-                        var f64 = (Float64Constant)instruction;
-                        await stack.Push(f64.Value);
-                        break;
-                    }
+                    case OpCode.F64Const:
+                        {
+                            var f64 = (InstF64Const)instruction;
+                            await stack.Push(f64.GetValue());
+                            break;
+                        }
 
-                    case OpCode.Float64Absolute:
-                    {
-                        await EmitPrefixUnaryFunction(stack, WebAssemblyValueType.Float64, "Math.Abs");
-                        break;
-                    }
+                    case OpCode.F64Eq:
+                        {
+                            await EmitBinaryTransform(stack, ValType.F64, ValType.I32, "({0} == {1} ? 1 : 0)");
+                            break;
+                        }
 
-                    case OpCode.Float64Negate:
-                    {
-                        await EmitPrefixUnaryFunction(stack, WebAssemblyValueType.Float64, "-");
-                        break;
-                    }
+                    case OpCode.F64Ne:
+                        {
+                            await EmitBinaryTransform(stack, ValType.F64, ValType.I32, "({0} != {1} ? 1 : 0)");
+                            break;
+                        }
 
-                    case OpCode.Float64Ceiling:
-                    {
-                        await EmitPrefixUnaryFunction(stack, WebAssemblyValueType.Float64, "Math.Ceiling");
-                        break;
-                    }
+                    case OpCode.F64Lt:
+                        {
+                            await EmitBinaryTransform(stack, ValType.F64, ValType.I32, "({0} < {1} ? 1 : 0)");
+                            break;
+                        }
 
-                    case OpCode.Float64Floor:
-                    {
-                        await EmitPrefixUnaryFunction(stack, WebAssemblyValueType.Float64, "Math.Floor");
-                        break;
-                    }
+                    case OpCode.F64Gt:
+                        {
+                            await EmitBinaryTransform(stack, ValType.F64, ValType.I32, "({0} > {1} ? 1 : 0)");
+                            break;
+                        }
 
-                    case OpCode.Float64Truncate:
-                    {
-                        await EmitPrefixUnaryFunction(stack, WebAssemblyValueType.Float64, "Math.Truncate");
-                        break;
-                    }
+                    case OpCode.F64Le:
+                        {
+                            await EmitBinaryTransform(stack, ValType.F64, ValType.I32, "({0} <= {1} ? 1 : 0)");
+                            break;
+                        }
 
-                    case OpCode.Float64Nearest:
-                    {
-                        await EmitUnaryFunction(stack, WebAssemblyValueType.Float64, "Math.Round({0}, MidpointRounding.ToEven)");
-                        break;
-                    }
+                    case OpCode.F64Ge:
+                        {
+                            await EmitBinaryTransform(stack, ValType.F64, ValType.I32, "({0} >= {1} ? 1 : 0)");
+                            break;
+                        }
 
-                    case OpCode.Float64SquareRoot:
-                    {
-                        await EmitPrefixUnaryFunction(stack, WebAssemblyValueType.Float64, "Math.Sqrt");
-                        break;
-                    }
+                    case OpCode.F64Abs:
+                        {
+                            await EmitPrefixUnaryTransform(stack, ValType.F64, ValType.F64, "Math.Abs");
+                            break;
+                        }
 
-                    case OpCode.Float64Add:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float64, "{0} + {1}");
-                        break;
-                    }
+                    case OpCode.F64Neg:
+                        {
+                            await EmitPrefixUnaryTransform(stack, ValType.F64, ValType.F64, "-");
+                            break;
+                        }
 
-                    case OpCode.Float64Subtract:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float64, "{0} - {1}");
-                        break;
-                    }
+                    case OpCode.F64Ceil:
+                        {
+                            await EmitPrefixUnaryTransform(stack, ValType.F64, ValType.F64, "Math.Ceiling");
+                            break;
+                        }
 
-                    case OpCode.Float64Multiply:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float64, "{0} * {1}");
-                        break;
-                    }
+                    case OpCode.F64Floor:
+                        {
+                            await EmitPrefixUnaryTransform(stack, ValType.F64, ValType.F64, "Math.Floor");
+                            break;
+                        }
 
-                    case OpCode.Float64Divide:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float64, "{0} / {1}");
-                        break;
-                    }
+                    case OpCode.F64Trunc:
+                        {
+                            await EmitPrefixUnaryTransform(stack, ValType.F64, ValType.F64, "Math.Truncate");
+                            break;
+                        }
 
-                    case OpCode.Float64Minimum:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float64, "Math.Min({0}, {1})");
-                        break;
-                    }
+                    case OpCode.F64Nearest:
+                        {
+                            await EmitUnaryTransform(stack, ValType.F64, ValType.F64, "Math.Round({0}, MidpointRounding.ToEven)");
+                            break;
+                        }
 
-                    case OpCode.Float64Maximum:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float64, "Math.Max({0}, {1})");
-                        break;
-                    }
+                    case OpCode.F64Sqrt:
+                        {
+                            await EmitPrefixUnaryTransform(stack, ValType.F64, ValType.F64, "Math.Sqrt");
+                            break;
+                        }
 
-                    case OpCode.Float64CopySign:
-                    {
-                        await EmitBinaryFunction(stack, WebAssemblyValueType.Float64, "Math.CopySign({0}, {1})");
-                        break;
-                    }
+                    case OpCode.F64Add:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F64, "{0} + {1}");
+                            break;
+                        }
 
-                    case OpCode.Float64Equal:
-                    {
-                        await EmitBinaryTransform(stack, WebAssemblyValueType.Float64, WebAssemblyValueType.Int32, "({0} == {1}) ? 1 : 0");
-                        break;
-                    }
+                    case OpCode.F64Sub:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F64, "{0} - {1}");
+                            break;
+                        }
 
-                    case OpCode.Float64NotEqual:
-                    {
-                        await EmitBinaryTransform(stack, WebAssemblyValueType.Float64, WebAssemblyValueType.Int32, "({0} != {1}) ? 1 : 0");
-                        break;
-                    }
+                    case OpCode.F64Mul:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F64, "{0} * {1}");
+                            break;
+                        }
 
-                    case OpCode.Float64LessThan:
-                    {
-                        await EmitBinaryTransform(stack, WebAssemblyValueType.Float64, WebAssemblyValueType.Int32, "({0} < {1}) ? 1 : 0");
-                        break;
-                    }
+                    case OpCode.F64Div:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F64, "{0} / {1}");
+                            break;
+                        }
 
-                    case OpCode.Float64GreaterThan:
-                    {
-                        await EmitBinaryTransform(stack, WebAssemblyValueType.Float64, WebAssemblyValueType.Int32, "({0} > {1}) ? 1 : 0");
-                        break;
-                    }
+                    case OpCode.F64Min:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F64, "Math.Min({0}, {1})");
+                            break;
+                        }
 
-                    case OpCode.Float64LessThanOrEqual:
-                    {
-                        await EmitBinaryTransform(stack, WebAssemblyValueType.Float64, WebAssemblyValueType.Int32, "({0} <= {1}) ? 1 : 0");
-                        break;
-                    }
+                    case OpCode.F64Max:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F64, "Math.Max({0}, {1})");
+                            break;
+                        }
 
-                    case OpCode.Float64GreaterThanOrEqual:
-                    {
-                        await EmitBinaryTransform(stack, WebAssemblyValueType.Float64, WebAssemblyValueType.Int32, "({0} >= {1}) ? 1 : 0");
-                        break;
-                    }
+                    case OpCode.F64Copysign:
+                        {
+                            await EmitBinaryFunction(stack, ValType.F64, "Math.CopySign({0}, {1})");
+                            break;
+                        }
                     #endregion
 
                     case OpCode.Call:
-                    {
-                        var call = (Call)instruction;
-                        var type = module.Types[(int)module.GetModuleFuncTypeIndex(call.Index)];
-
-                        var inputs = (from parameter in type.Parameters
-                                      let localName = stack.Pop(parameter)
-                                      select localName).ToArray();
-
-                        var callName = NameConventions.Function(call.Index);
-                        var parameters = string.Join(", ", inputs);
-                        var expr = $"{callName}({parameters})";
-
-                        if (type.Returns.Count == 0)
                         {
-                            await writer.AppendLine($"{expr};");
-                        }
-                        else if (type.Returns.Count == 1)
-                        {
-                            await stack.Push(type.Returns[0], expr);
-                        }
-                        else
-                        {
-                            // Make call, assigning results to temps
-                            var tmps = type.Returns.Select(type => (type, name:$"call_return_tmp{tmpVarIdx++}")).ToArray();
-                            var tuple = string.Join(", ", tmps.Select(a => $"{a.type} {a.name}"));
-                            await writer.AppendLine($"{tuple} = {expr};");
+                            var call = (InstCall)instruction;
 
-                            // Push returned results to stack
-                            foreach (var item in tmps)
-                                await stack.Push(item.type, item.name);
-                        }
+                            var func = module.GetFunction(call.X);
+                            var type = (FunctionType)module.Types[func.TypeIndex.Value].SubTypes.Single().Body;
+                            //var type = (FunctionType)module.Types[(int)call.X.Value].SubTypes.Single().Body;
 
-                        break;
-                    }
+                            var inputs = (from parameter in type.ParameterTypes.Types
+                                          let localName = stack.Pop(parameter)
+                                          select localName).ToArray();
+
+                            var callName = NameConventions.Function(call.X);
+                            var parameters = string.Join(", ", inputs);
+                            var expr = $"{callName}({parameters})";
+
+                            if (type.ResultType.Arity == 0)
+                            {
+                                await writer.AppendLine($"{expr};");
+                            }
+                            else if (type.ResultType.Arity == 1)
+                            {
+                                await stack.Push(type.ResultType.Types.Single(), expr);
+                            }
+                            else
+                            {
+                                // Make call, assigning results to temps
+                                var tmps = type.ResultType.Types.Select(type => (type, name: $"call_return_tmp{tmpVarIdx++}")).ToArray();
+                                var tuple = string.Join(", ", tmps.Select(a => $"{a.type} {a.name}"));
+                                await writer.AppendLine($"{tuple} = {expr};");
+
+                                // Push returned results to stack
+                                foreach (var item in tmps)
+                                    await stack.Push(item.type, item.name);
+                            }
+
+                            break;
+                        }
 
                     case OpCode.Unreachable:
-                    {
-                        await writer.AppendLine("throw new UnreachableTrapException();");
-                        break;
-                    }
+                        {
+                            await writer.AppendLine("throw new UnreachableTrapException();");
+                            break;
+                        }
 
                     case OpCode.Drop:
-                    {
-                        stack.Pop(out _);
-                        break;
-                    }
+                        {
+                            stack.Pop(out _);
+                            break;
+                        }
 
                     case OpCode.Select:
-                    {
-                        // Pop 2 values of same type
-                        var a = stack.Pop(out var aType);
-                        var b = stack.Pop(out var bType);
-                        if (aType != bType)
-                            throw new SelectMismatchedTypesException(aType, bType);
+                        {
+                            // Pop 2 values of same type
+                            var a = stack.Pop(out var aType);
+                            var b = stack.Pop(out var bType);
+                            if (aType != bType)
+                                throw new SelectMismatchedTypesException(aType, bType);
 
-                        // Pop discriminator
-                        var c = stack.Pop(WebAssemblyValueType.Int32);
+                            // Pop discriminator
+                            var c = stack.Pop(ValType.I32);
 
-                        // Select based on discriminator
-                        var expr = $"({c} != 0 ? {a} : {b})";
-                        await stack.Push(aType, expr);
-                        break;
-                    }
+                            // Select based on discriminator
+                            var expr = $"({c} != 0 ? {a} : {b})";
+                            await stack.Push(aType, expr);
+                            break;
+                        }
 
                     #region locals
                     case OpCode.LocalGet:
-                    {
-                        var localGet = (LocalGet)instruction;
-                        var local = locals[(int)localGet.Index];
-                        await stack.Push(local.Type, local.localName);
-                        break;
-                    }
+                        {
+                            var localGet = (InstLocalGet)instruction;
+                            var local = locals[localGet.GetIndex()];
+                            await stack.Push(local.Type, local.localName);
+                            break;
+                        }
 
                     case OpCode.LocalSet:
-                    {
-                        var localSet = (LocalSet)instruction;
-                        var local = locals[(int)localSet.Index];
-                        var stackName = stack.Pop(local.Type);
-                        await writer.AppendLine($"{stackName} = {local.localName};");
-                        break;
-                    }
+                        {
+                            var localSet = (InstLocalSet)instruction;
+                            var local = locals[localSet.GetIndex()];
+                            var stackName = stack.Pop(local.Type);
+                            await writer.AppendLine($"{stackName} = {local.localName};");
+                            break;
+                        }
 
                     case OpCode.LocalTee:
-                    {
-                        var localTee = (LocalTee)instruction;
-                        var local = locals[(int)localTee.Index];
-                        var stackName = stack.Pop(local.Type);
-                        await writer.AppendLine($"{stackName} = {local.localName};");
-                        await stack.Push(local.Type, local.localName);
-                        break;
-                    }
+                        {
+                            var localTee = (InstLocalTee)instruction;
+                            var local = locals[localTee.GetIndex()];
+                            var stackName = stack.Pop(local.Type);
+                            await writer.AppendLine($"{stackName} = {local.localName};");
+                            await stack.Push(local.Type, local.localName);
+                            break;
+                        }
                     #endregion
 
                     #region globals
                     case OpCode.GlobalGet:
-                    {
-                        var globalGet = (GlobalGet)instruction;
-                        var global = module.Globals[(int)globalGet.Index];
-                        await stack.Push(global.ContentType, $"_global_{globalGet.Index}");
-                        break;
-                    }
+                        {
+                            var globalGet = (InstGlobalGet)instruction;
+                            var globalIdx = globalGet.GetIndex();
+                            var global = module.Globals[(int)globalIdx.Value];
+
+                            await stack.Push(global.Type.ContentType, NameConventions.Global(globalIdx));
+                            break;
+                        }
 
                     case OpCode.GlobalSet:
-                    {
-                        var globalSet = (GlobalSet)instruction;
-                        var global = module.Globals[(int)globalSet.Index];
-                        if (!global.IsMutable)
-                            throw new CannotSetImmutableGlobal(globalSet.Index);
+                        {
+                            var globalSet = (InstGlobalSet)instruction;
+                            var globalIdx = globalSet.GetIndex();
+                            var global = module.Globals[(int)globalIdx.Value];
 
-                        var v = stack.Pop(global.ContentType);
-                        await writer.AppendLine($"_global_{globalSet.Index} = {v};");
+                            if (global.Type.Mutability != Mutability.Mutable)
+                                throw new CannotSetImmutableGlobal(globalIdx);
 
-                        break;
-                    }
+                            var v = stack.Pop(global.Type.ContentType);
+                            await writer.AppendLine($"{NameConventions.Global(globalIdx)} = {v};");
+
+                            break;
+                        }
                     #endregion
 
                     #region memory
                     case OpCode.MemorySize:
                     {
-                        var n = NameConventions.Memory(0);
-                        await stack.Push(WebAssemblyValueType.Int32, $"{n}.Size");
+                        var n = NameConventions.Memory("0");
+                        await stack.Push(ValType.I32, $"{n}.Size");
                         break;
                     }
 
                     case OpCode.MemoryGrow:
                     {
-                        var n = NameConventions.Memory(0);
-                        var pages = stack.Pop(WebAssemblyValueType.Int32);
+                        var n = NameConventions.Memory("0");
+                        var pages = stack.Pop(ValType.I32);
                         var expr = $"{n}.Grow({pages})";
-                        await stack.Push(WebAssemblyValueType.Int32, expr);
+                        await stack.Push(ValType.I32, expr);
+                        break;
+                    }
+                    #endregion
+
+                    #region Memory I32
+                    case OpCode.I32Load:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadI32", ValType.I32);
+                        break;
+                    }
+
+                    case OpCode.I32Store:
+                    {
+                        await EmitMemoryStore(stack, writer, instruction, "WriteI32", ValType.I32);
+                        break;
+                    }
+
+                    case OpCode.I32Load8S:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadI8", ValType.I32);
+                        break;
+                    }
+
+                    case OpCode.I32Load8U:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadU8", ValType.I32);
+                        break;
+                    }
+
+                    case OpCode.I32Load16S:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadI16", ValType.I32);
+                        break;
+                    }
+
+                    case OpCode.I32Load16U:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadU16", ValType.I32);
+                        break;
+                    }
+                    #endregion
+
+                    #region Memory I64
+                    case OpCode.I64Load:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadI64", ValType.I64);
+                        break;
+                    }
+
+                    case OpCode.I64Store:
+                    {
+                        await EmitMemoryStore(stack, writer, instruction, "WriteI64", ValType.I64);
+                        break;
+                    }
+
+                    case OpCode.I64Load8S:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadI8", ValType.I64);
+                        break;
+                    }
+
+                    case OpCode.I64Load8U:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadU8", ValType.I64);
+                        break;
+                    }
+
+                    case OpCode.I64Load16S:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadI16", ValType.I64);
+                        break;
+                    }
+
+                    case OpCode.I64Load16U:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadU16", ValType.I64);
+                        break;
+                    }
+
+                    case OpCode.I64Load32S:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadI32", ValType.I64);
+                        break;
+                    }
+
+                    case OpCode.I64Load32U:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadU32", ValType.I64);
+                        break;
+                    }
+                    #endregion
+
+                    #region Memory F32
+                    case OpCode.F32Load:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadF32", ValType.F32);
+                        break;
+                    }
+                    case OpCode.F32Store:
+                    {
+                        await EmitMemoryStore(stack, writer, instruction, "WriteF32", ValType.F32);
+                        break;
+                    }
+                    #endregion
+
+                    #region Memory F64
+                    case OpCode.F64Load:
+                    {
+                        await EmitMemoryLoad(stack, instruction, "ReadF64", ValType.F64);
+                        break;
+                    }
+                    case OpCode.F64Store:
+                    {
+                        await EmitMemoryStore(stack, writer, instruction, "WriteF64", ValType.F64);
                         break;
                     }
                     #endregion
 
                     case OpCode.If:
                     case OpCode.Else:
-                    case OpCode.Branch:
-                    case OpCode.BranchIf:
-                    case OpCode.BranchTable:
+                    case OpCode.Br:
+                    case OpCode.BrIf:
+                    case OpCode.BrTable:
                     case OpCode.CallIndirect:
-                    case OpCode.Int32Load:
-                    case OpCode.Int64Load:
-                    case OpCode.Float32Load:
-                    case OpCode.Float64Load:
-                    case OpCode.Int32Load8Signed:
-                    case OpCode.Int32Load8Unsigned:
-                    case OpCode.Int32Load16Signed:
-                    case OpCode.Int32Load16Unsigned:
-                    case OpCode.Int64Load8Signed:
-                    case OpCode.Int64Load8Unsigned:
-                    case OpCode.Int64Load16Signed:
-                    case OpCode.Int64Load16Unsigned:
-                    case OpCode.Int64Load32Signed:
-                    case OpCode.Int64Load32Unsigned:
-                    case OpCode.Int32Store:
-                    case OpCode.Int64Store:
-                    case OpCode.Float32Store:
-                    case OpCode.Float64Store:
-                    case OpCode.Int32Store8:
-                    case OpCode.Int32Store16:
-                    case OpCode.Int64Store8:
-                    case OpCode.Int64Store16:
-                    case OpCode.Int64Store32:
-                    case OpCode.Int32Equal:
-                    case OpCode.Int32NotEqual:
-                    case OpCode.Int32GreaterThanSigned:
-                    case OpCode.Int32GreaterThanUnsigned:
-                    case OpCode.Int32LessThanOrEqualSigned:
-                    case OpCode.Int32LessThanOrEqualUnsigned:
-                    case OpCode.Int32GreaterThanOrEqualSigned:
-                    case OpCode.Int32GreaterThanOrEqualUnsigned:
-                    case OpCode.Int64Equal:
-                    case OpCode.Int64NotEqual:
-                    case OpCode.Int64LessThanSigned:
-                    case OpCode.Int64LessThanUnsigned:
-                    case OpCode.Int64GreaterThanSigned:
-                    case OpCode.Int64GreaterThanUnsigned:
-                    case OpCode.Int64LessThanOrEqualSigned:
-                    case OpCode.Int64LessThanOrEqualUnsigned:
-                    case OpCode.Int64GreaterThanOrEqualSigned:
-                    case OpCode.Int64GreaterThanOrEqualUnsigned:
-                    case OpCode.Int32CountLeadingZeroes:
-                    case OpCode.Int32CountTrailingZeroes:
-                    case OpCode.Int32CountOneBits:
-                    
-                    case OpCode.Int32DivideSigned:
-                    case OpCode.Int32DivideUnsigned:
-                    case OpCode.Int32RemainderSigned:
-                    case OpCode.Int32RemainderUnsigned:
-                    case OpCode.Int32ShiftLeft:
-                    case OpCode.Int32RotateLeft:
-                    case OpCode.Int32RotateRight:
-                    case OpCode.Int64CountLeadingZeroes:
-                    case OpCode.Int64CountTrailingZeroes:
-                    case OpCode.Int64CountOneBits:
-                    case OpCode.Int64Add:
-                    case OpCode.Int64Subtract:
-                    case OpCode.Int64Multiply:
-                    case OpCode.Int64DivideSigned:
-                    case OpCode.Int64DivideUnsigned:
-                    case OpCode.Int64RemainderSigned:
-                    case OpCode.Int64RemainderUnsigned:
-                    case OpCode.Int64And:
-                    case OpCode.Int64Or:
-                    case OpCode.Int64ExclusiveOr:
-                    case OpCode.Int64ShiftLeft:
-                    case OpCode.Int64ShiftRightSigned:
-                    case OpCode.Int64ShiftRightUnsigned:
-                    case OpCode.Int64RotateLeft:
-                    case OpCode.Int64RotateRight:
-                    case OpCode.Int32TruncateFloat32Signed:
-                    case OpCode.Int32TruncateFloat32Unsigned:
-                    case OpCode.Int32TruncateFloat64Signed:
-                    case OpCode.Int32TruncateFloat64Unsigned:
-                    case OpCode.Int64ExtendInt32Signed:
-                    case OpCode.Int64ExtendInt32Unsigned:
-                    case OpCode.Int64TruncateFloat32Signed:
-                    case OpCode.Int64TruncateFloat32Unsigned:
-                    case OpCode.Int64TruncateFloat64Signed:
-                    case OpCode.Int64TruncateFloat64Unsigned:
-                    case OpCode.Float32ConvertInt32Signed:
-                    case OpCode.Float32ConvertInt32Unsigned:
-                    case OpCode.Float32ConvertInt64Signed:
-                    case OpCode.Float32ConvertInt64Unsigned:
-                    case OpCode.Float32DemoteFloat64:
-                    case OpCode.Float64ConvertInt32Signed:
-                    case OpCode.Float64ConvertInt32Unsigned:
-                    case OpCode.Float64ConvertInt64Signed:
-                    case OpCode.Float64ConvertInt64Unsigned:
-                    case OpCode.Float64PromoteFloat32:
-                    case OpCode.Int32ReinterpretFloat32:
-                    case OpCode.Int64ReinterpretFloat64:
-                    case OpCode.Float32ReinterpretInt32:
-                    case OpCode.Float64ReinterpretInt64:
-                    case OpCode.Int32Extend8Signed:
-                    case OpCode.Int32Extend16Signed:
-                    case OpCode.Int64Extend8Signed:
-                    case OpCode.Int64Extend16Signed:
-                    case OpCode.Int64Extend32Signed:
+                    case OpCode.ReturnCall:
+                    case OpCode.ReturnCallIndirect:
+                    case OpCode.CallRef:
+                    case OpCode.ReturnCallRef:
+                    case OpCode.TryTable:
+                    case OpCode.Throw:
+                    case OpCode.ThrowRef:
+                    case OpCode.RefNull:
+                    case OpCode.RefIsNull:
+                    case OpCode.RefFunc:
+                    case OpCode.RefEq:
+                    case OpCode.RefAsNonNull:
+                    case OpCode.BrOnNull:
+                    case OpCode.BrOnNonNull:
+                    case OpCode.SelectT:
+                    case OpCode.TableGet:
+                    case OpCode.TableSet:
+                    case OpCode.I32Store8:
+                    case OpCode.I32Store16:
+                    case OpCode.I64Store8:
+                    case OpCode.I64Store16:
+                    case OpCode.I64Store32:
+                    case OpCode.I32DivS:
+                    case OpCode.I32DivU:
+                    case OpCode.I32RemS:
+                    case OpCode.I32RemU:
+                    case OpCode.I64DivS:
+                    case OpCode.I64DivU:
+                    case OpCode.I64RemS:
+                    case OpCode.I64RemU:
+                    case OpCode.I32TruncF32S:
+                    case OpCode.I32TruncF32U:
+                    case OpCode.I32TruncF64S:
+                    case OpCode.I32TruncF64U:
+                    case OpCode.I64ExtendI32S:
+                    case OpCode.I64ExtendI32U:
+                    case OpCode.I64TruncF32S:
+                    case OpCode.I64TruncF32U:
+                    case OpCode.I64TruncF64S:
+                    case OpCode.I64TruncF64U:
+                    case OpCode.F32ConvertI32S:
+                    case OpCode.F32ConvertI32U:
+                    case OpCode.F32ConvertI64S:
+                    case OpCode.F32ConvertI64U:
+                    case OpCode.F32DemoteF64:
+                    case OpCode.F64ConvertI32S:
+                    case OpCode.F64ConvertI32U:
+                    case OpCode.F64ConvertI64S:
+                    case OpCode.F64ConvertI64U:
+                    case OpCode.F64PromoteF32:
+                    case OpCode.I32ReinterpretF32:
+                    case OpCode.I64ReinterpretF64:
+                    case OpCode.F32ReinterpretI32:
+                    case OpCode.F64ReinterpretI64:
+                    case OpCode.I32Extend8S:
+                    case OpCode.I32Extend16S:
+                    case OpCode.I64Extend8S:
+                    case OpCode.I64Extend16S:
+                    case OpCode.I64Extend32S:
+                        await writer.AppendLine($"throw new NotImplementedException(\"todo: {instruction.Op.x00}\");");
+                        Console.WriteLine($"todo: {instruction.Op.x00}");
+                        break;
+
                     default:
-                        throw new UnsupportedWasmInstructionException(instruction.OpCode);
+                        throw new UnsupportedWasmInstructionException(instruction.Op.x00);
                 }
             }
 
@@ -704,60 +1042,99 @@ internal class ModuleFunction(Function Function, FunctionBody Body, uint Index)
         #region emitters
         async Task EmitReturn(StackBuilder stack)
         {
-            var returns = (from @return in funcType.Returns
+            var returns = (from @return in funcType.ResultType.Types
                            let localName = stack.Pop(@return)
                            select localName).ToArray();
             if (returns.Length != 0)
                 await writer.AppendLine($"return ({string.Join(", ", returns)});");
         }
 
-        async Task EmitPrefixUnaryFunction(StackBuilder stack, WebAssemblyValueType type, string func)
-        {
-            await EmitPrefixUnaryTransform(stack, type, type, func);
-        }
+        //async Task EmitPrefixUnaryFunction(StackBuilder stack, ValType type, string func)
+        //{
+        //    await EmitPrefixUnaryTransform(stack, type, type, func);
+        //}
 
-        async Task EmitPrefixUnaryTransform(StackBuilder stack, WebAssemblyValueType typeIn, WebAssemblyValueType typeOut, string func)
+        async Task EmitPrefixUnaryTransform(StackBuilder stack, ValType typeIn, ValType typeOut, string func)
         {
             var v = stack.Pop(typeIn);
             var expr = $"{func}({v})";
             await stack.Push(typeOut, expr);
         }
 
-        async Task EmitUnaryFunction(StackBuilder stack, WebAssemblyValueType type, string funcFormat)
-        {
-            await EmitUnaryTransform(stack, type, type, funcFormat);
-        }
+        //async Task EmitUnaryFunction(StackBuilder stack, ValType type, string funcFormat)
+        //{
+        //    await EmitUnaryTransform(stack, type, type, funcFormat);
+        //}
 
-        async Task EmitUnaryTransform(StackBuilder stack, WebAssemblyValueType typeIn, WebAssemblyValueType typeOut, string funcFormat)
+        async Task EmitUnaryTransform(StackBuilder stack, ValType typeIn, ValType typeOut, string funcFormat)
         {
             var v = stack.Pop(typeIn);
             var expr = string.Format(funcFormat, v);
             await stack.Push(typeOut, expr);
         }
 
-        async Task EmitBinaryFunction(StackBuilder stack, WebAssemblyValueType type, string funcFormat)
+        async Task EmitBinaryFunction(StackBuilder stack, ValType type, string funcFormat)
         {
             await EmitBinaryTransform(stack, type, type, funcFormat);
         }
 
-        async Task EmitBinaryUnsignedInt32Operator(StackBuilder stack, string @operator)
+        async Task EmitBinaryUnsignedInt32Operator(StackBuilder stack, string @operator, string prefix = "")
         {
-            var fmt = $"unchecked((uint){{0}}) {@operator} unchecked((uint){{1}})";
-            await EmitBinaryFunction(stack, WebAssemblyValueType.Int32, fmt);
+            var fmt = $"{prefix}(unchecked((int)(((uint){{0}}) {@operator} unchecked((uint){{1}}))))";
+            await EmitBinaryFunction(stack, ValType.I32, fmt);
         }
 
-        async Task EmitBinarySignedInt32Operator(StackBuilder stack, string @operator)
+        async Task EmitBinarySignedInt32Operator(StackBuilder stack, string @operator, string prefix = "")
         {
-            var fmt = $"unchecked((int){{0}}) {@operator} unchecked((int){{1}})";
-            await EmitBinaryFunction(stack, WebAssemblyValueType.Int32, fmt);
+            var fmt = $"{prefix}(unchecked((int){{0}}) {@operator} unchecked((int){{1}}))";
+            await EmitBinaryFunction(stack, ValType.I32, fmt);
         }
 
-        async Task EmitBinaryTransform(StackBuilder stack, WebAssemblyValueType typeIn, WebAssemblyValueType typeOut, string funcFormat)
+        async Task EmitBinarySignedInt64Operator(StackBuilder stack, string @operator, string prefix = "")
+        {
+            var fmt = $"{prefix}(unchecked((long){{0}}) {@operator} unchecked((long){{1}}))";
+            await EmitBinaryFunction(stack, ValType.I32, fmt);
+        }
+
+        async Task EmitInequality(StackBuilder stack, string @operator, bool unsigned)
+        {
+            var fmt = unsigned
+                    ? $"Convert.ToInt32(unchecked(((uint){{0}})) {@operator} unchecked(((uint){{1}})))"
+                    : $"Convert.ToInt32(unchecked(((int){{0}})) {@operator} unchecked(((int){{1}})))";
+
+            await EmitBinaryFunction(stack, ValType.I32, fmt);
+        }
+
+        async Task EmitBinaryTransform(StackBuilder stack, ValType typeIn, ValType typeOut, string funcFormat)
         {
             var a = stack.Pop(typeIn);
             var b = stack.Pop(typeIn);
             var expr = string.Format(funcFormat, a, b);
             await stack.Push(typeOut, expr);
+        }
+
+        async Task EmitMemoryLoad(StackBuilder stack, InstructionBase instr, string readMethod, ValType valType)
+        {
+            var instruction = (InstMemoryLoad)instr;
+            var dotnet = valType.ToDotnetType().Name;
+
+            var m = instruction.GetMemArg();
+            var n = NameConventions.Memory($"{m.M.Value}");
+            var addr = stack.Pop(ValType.I32);
+
+            await stack.Push(valType, $"({dotnet}){n}.{readMethod}({addr} + {m.Offset})");
+        }
+
+        async Task EmitMemoryStore(StackBuilder stack, IndentedTextWriter writer, InstructionBase instr, string writeMethod, ValType valType)
+        {
+            var instruction = (InstMemoryStore)instr;
+
+            var m = instruction.GetMemArg();
+            var n = NameConventions.Memory($"{m.M.Value}");
+            var addr = stack.Pop(ValType.I32);
+            var val = stack.Pop(valType);
+
+            await writer.AppendLine($"{n}.{writeMethod}({val}, {addr} + {m.Offset});");
         }
         #endregion
     }
@@ -765,38 +1142,38 @@ internal class ModuleFunction(Function Function, FunctionBody Body, uint Index)
     private class StackBuilder(IndentedTextWriter Writer)
     {
         private int _index;
-        private readonly Stack<(WebAssemblyValueType, string)> _stack = [ ];
+        private readonly Stack<(ValType, string)> _stack = [];
 
         #region push
-        public async Task Push(WebAssemblyValueType type, string value, bool @const = false)
+        public async Task Push(ValType type, string value, bool @const = false)
         {
             var name = $"stack{_index++}";
-            await Writer.AppendLine($"{(@const ? "const " : "")}{type.ToDotnetType()} {name} = ({value});");
+            await Writer.AppendLine($"{(@const ? "const " : "")}{type.ToDotnetType().Name} {name} = ({value});");
             _stack.Push((type, name));
         }
 
         public async Task Push(int value)
         {
-            await Push(WebAssemblyValueType.Int32, value.ToString(), @const:true);
+            await Push(ValType.I32, value.ToString(), @const: true);
         }
 
         public async Task Push(long value)
         {
-            await Push(WebAssemblyValueType.Int64, value.ToString(), @const: true);
+            await Push(ValType.I64, value.ToString(), @const: true);
         }
 
         public async Task Push(float value)
         {
-            await Push(WebAssemblyValueType.Float32, value.ToString(CultureInfo.InvariantCulture), @const: true);
+            await Push(ValType.F32, value.ToString(CultureInfo.InvariantCulture), @const: true);
         }
 
         public async Task Push(double value)
         {
-            await Push(WebAssemblyValueType.Float64, value.ToString(CultureInfo.InvariantCulture), @const: true);
+            await Push(ValType.F64, value.ToString(CultureInfo.InvariantCulture), @const: true);
         }
         #endregion
 
-        public string Pop(WebAssemblyValueType type)
+        public string Pop(ValType type)
         {
             var (t, n) = _stack.Pop();
             if (t != type)
@@ -804,7 +1181,7 @@ internal class ModuleFunction(Function Function, FunctionBody Body, uint Index)
             return n;
         }
 
-        public string Pop(out WebAssemblyValueType type)
+        public string Pop(out ValType type)
         {
             var (t, n) = _stack.Pop();
             type = t;
@@ -814,9 +1191,9 @@ internal class ModuleFunction(Function Function, FunctionBody Body, uint Index)
 
     private class ScopeChecker
     {
-        private readonly Stack<(bool, string)> _scopes = [ ];
+        private readonly Stack<(bool, string)> _scopes = [];
 
-        public ScopeChecker(string scope)
+        public ScopeChecker()
         {
             _scopes.Push((false, ""));
         }

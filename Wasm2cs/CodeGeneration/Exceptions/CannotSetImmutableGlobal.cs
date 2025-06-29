@@ -1,11 +1,13 @@
-﻿namespace Wasm2cs.CodeGeneration.Exceptions;
+﻿using Wacs.Core.Types;
+
+namespace Wasm2cs.CodeGeneration.Exceptions;
 
 public class CannotSetImmutableGlobal
     : Exception
 {
-    public uint Index { get; }
+    public GlobalIdx Index { get; }
 
-    public CannotSetImmutableGlobal(uint index)
+    public CannotSetImmutableGlobal(GlobalIdx index)
         : base($"Cannot set an immutable global at index {index}")
     {
         Index = index;

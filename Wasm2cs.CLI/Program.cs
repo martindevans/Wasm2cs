@@ -1,9 +1,14 @@
 ﻿using System.ComponentModel;
+using System.Diagnostics;
 using JetBrains.Annotations;
 using Spectre.Console.Cli;
 using Wasm2cs;
 
 var app = new CommandApp<ConvertWasmCommand>();
+app.Configure(config =>
+{
+    config.Settings.PropagateExceptions = Debugger.IsAttached;
+});
 return app.Run(args);
 
 [UsedImplicitly]
@@ -46,7 +51,8 @@ internal sealed class ConvertWasmCommand
                 if (settings.OutputPath != null)
                 {
                     await using (var outputStream = File.Create(settings.OutputPath))
-                        await WasmConverter.Convert(name, @namespace, inputStream, outputStream);
+                    await using (var bufferedStream = new BufferedStream(outputStream, 1_000_000))
+                        await WasmConverter.Convert(name, @namespace, inputStream, bufferedStream);
                 }
                 else
                 {

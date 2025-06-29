@@ -1,14 +1,14 @@
-﻿using WebAssembly;
+﻿using Wacs.Core.Types.Defs;
 
 namespace Wasm2cs.CodeGeneration.Exceptions;
 
 public class SelectMismatchedTypesException
     : Exception
 {
-    public WebAssemblyValueType AType { get; }
-    public WebAssemblyValueType BType { get; }
+    public ValType AType { get; }
+    public ValType BType { get; }
 
-    public SelectMismatchedTypesException(WebAssemblyValueType aType, WebAssemblyValueType bType)
+    public SelectMismatchedTypesException(ValType aType, ValType bType)
         : base($"'Select' instruction should pop two values with same type, but stack contained: [{aType}, {bType}]")
     {
         AType = aType;
